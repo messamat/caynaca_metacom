@@ -111,11 +111,21 @@ list(
   #Compute network distance
   tar_target(
     net_dist,
-    compute_netdist_allsites(in_sites_snapped = sites_snapped_path, 
-                             in_net = net_formatted,
-                             IDcol = sites_IDcol)
+    compute_netdist(in_sites_snapped = sites_snapped_path, 
+                    in_net = net_formatted,
+                    IDcol = sites_IDcol)
   )
-  
+  ,
+
+  #Compute environmental distance matrix
+  tar_target(
+    env_dist,
+    compute_envdist(
+      in_env_dt = env_dt,
+      IDcol = sites_IDcol
+    )
+  )
+
 )
 
 
@@ -127,15 +137,11 @@ list(
 
 #LAter on: Compute topographic distance (terrain is accidented)
 
-#Compute alpha diversity for each site and year
-#Spatial beta (pairwise Bray–Curtis dissimilarity distance) for each year
-#Temporal beta for each site
-#Gamma (total number of families) diversity for each year
 
-#Compute environmental distance matrix
-#   Normalize data
-#   Gower's matrix: weigh factors
-#   
+
+
+
+
 
 #traditional Mantel tests for spatial distances (topographic and network distance)
 #Bray–Curtis dissimilarity based on macroinvertebrate abundances as response variable
