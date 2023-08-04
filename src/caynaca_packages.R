@@ -1,3 +1,4 @@
+library(betapart)
 library(cluster)
 library(ggcorrplot)
 library(data.table)
@@ -15,5 +16,6 @@ library(skimr)
 library(targets)
 library(terra)
 library(tidygraph)
+library(vegan)
 library(zoo)
 

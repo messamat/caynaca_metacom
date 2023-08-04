@@ -124,8 +124,22 @@ list(
       in_env_dt = env_dt,
       IDcol = sites_IDcol
     )
+  ),
+  
+  tar_target(
+    spatial_beta,
+    compute_spatial_beta(
+      in_sp_dt = sp_dt
+    )
   )
-
+  # ,
+  # 
+  # tar_target(
+  #   spatial_beta_plots,
+  #   plot_spatial_beta(
+  #     in_spatial_beta = spatial_beta
+  #   )
+  # )
 )
 
 

@@ -1,5 +1,153 @@
 #------------------ UTILITY FUNCTIONS -------------------------------------------
+#---- box.cox.chord ---------------------------------------------------
+#' Compute the box.cox.chord transformation on quantitative community composition 
+#' data for any exponent. Usual exponents are larger than or equal to 0.
+#'
+#' Arguments --
+#' @param mat : matrix or data.frame of quantitative non-negative community 
+#'    composition data (frequencies, biomasses, energy measures, etc.)
+#' @param bc.exp : Box-Cox exponent to the data before chord transformation. 
+#'    Usual exponent values are {1, 0.5, 0.25, 0}, where 
+#'    bc.exp=1: no transformation; 
+#'    bc.exp=0.5: square-root transformation; 
+#'    bc.exp=0.25: fourth-root (or double square-root) transformation; 
+#'    bc.exp=0: log(y+1) transformation (default value). 
+#'    Default value: bc.exp=0 (log(y+1) transformation).
+#'
+#' Value --
+#' A Box-Cox+chord transformed matrix of the same size as the original data matrix.
+#'
+#' Author:: Pierre Legendre (Legendre and Brocard 2018)
+#' License: GPL (>=2)
 
+box.cox.chord <- 
+  function(mat, 
+           bc.exp=0) 
+  { 
+    # Internal function
+    vec.norm <- function(vec)  sqrt(sum(vec^2))
+    #
+    chck <- apply(mat, 1, sum)
+    if(any(chck == 0)) stop("Rows",which(chck==0)," of the data matrix sum to 0")
+    #
+    # Apply the user-selected Box-Cox exponent (bc.exp) to the frequency data
+    if(bc.exp==0) {
+      tmp <- log(mat+1) 
+    } else { 
+      tmp <- mat^bc.exp 
+    }
+    row.norms <- apply(tmp, 1, vec.norm)
+    #
+    # Apply the chord transformation to matrix "tmp" before returning it
+    res <- sweep(tmp, 1, row.norms, "/")
+  }
+
+#---- BCD ---------------------------------------------------
+#' Box-Cox transformation: find the best exponent to reach multivariate normality.
+#'
+#' Box-Cox-Dagnelie (BCD) method – Transform the data using different exponents. 
+#' Default: exponents in the [0,1] interval by steps of 0.1. Test the multivariate 
+#' normality of the data after each transformation using function dagnelie.test() 
+#' from package ade4.
+#' Note: the Dagnelie test requires that n > (rank+1) where 'n' is the number of 
+#' obsevations and 'rank' is the rank of the covariance matrix.
+#'
+#' Arguments --
+#' @param mat  Multivariate data table (object class: matrix or data.frame).
+#' @param bc.exp  vector of exponents from the Box-Cox series for transformation, 
+#'    for example bc.exp = c(0,0.1,0.2,0.25,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1)
+#'    Positive and negative exponents are allowed by the function, although 
+#'    it is recommended to use exponent values in the range [0,1].
+#' @param chord  Chord-transform the data and recompute the Dagnelie test of 
+#'    normality. Default: chord=TRUE; if chord=FALSE, do not transform data and 
+#'    do not recompute the test.
+#'
+#' Value --
+#' A table showing the Box-Cox exponent in the first column of each row. In 
+#' columns 2 and 3, one finds the Shapiro-Wilk W statistic (BC_W) of the Dagnelie 
+#' test of multivariate normality and the associated p-value (BC_p-val) after the 
+#' exponent has been applied to the original data. Columns 4 and 5 show the same  
+#' statistics(BC.chord_W and BC.chord_p-val) after the chord transformation has    
+#' been applied to the Box-Cox transformed data.
+#' 
+#' References --
+#'  Dagnelie, P. 1975. L'analyse statistique a plusieurs variables. 
+#'  Les Presses agronomiques de Gembloux, Gembloux, Belgium.
+#'
+#'  Legendre, P. and L. Legendre. 2012. Numerical ecology, 3rd English
+#'  edition. Elsevier Science BV, Amsterdam, The Netherlands.
+#'
+#' Author  Pierre Legendre
+#' License GPL (>=2)
+
+BCD <- 
+  function(mat, 
+           bc.exp=c(0,0.1,0.2,0.25,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1), 
+           chord=TRUE)
+  {
+    # Internal function
+    vec.norm <- function(vec)  sqrt(sum(vec^2))
+    #
+    require(ade4)
+    epsilon <- sqrt(.Machine$double.eps)
+    mat <- as.matrix(mat)
+    n <- nrow(mat)
+    p <- ncol(mat)
+    n.exp <- length(bc.exp)
+    #
+    if(chord) {
+      res <- matrix(NA,n.exp,5)
+      colnames(res) <- c("BC.exp","BC_W","BC_p-val","BC.chord_W","BC.chord_p-val")
+    } else {
+      res <- matrix(NA,n.exp,3)
+      colnames(res) <- c("BC.exp", "BC_W", "BC_p-val")	
+    }
+    res[,1] <- bc.exp
+    #
+    if(any(mat < 0)) stop("Negative values not allowed in community data", 
+                          call. = FALSE)
+    
+    chck1 <- apply(mat, 1, sum)
+    if(any(chck1 == 0)) stop("One or several rows of 'mat' sum to 0", 
+                             call. = FALSE)
+    
+    chck2 <- apply(mat, 2, var)
+    keep.spec <- which(chck2 > epsilon)
+    if(length(keep.spec) < p) {
+      cat(length(keep.spec),"species have variances > 0 and were kept\n")
+      cat("Species",which(chck2 <= epsilon)," were excluded\n")
+      mat2 <- mat[,keep.spec] 
+    } else { mat2 <- mat }
+    #
+    for(k in 1:n.exp) {
+      if(bc.exp[k]==0) {
+        # If BC exponent = 0, compute log(x+1)
+        # Add 1 to the data before log transformation
+        tmp <- log(mat2+1)                
+        # Add 1 to the data before applying a negative exponent
+      } else if(bc.exp[k]<0) { tmp <- (mat2+1)^bc.exp[k]
+      # No transformation when bc.exp=1
+      } else if(bc.exp[k]==1) { tmp <- mat2
+      # Apply the exponent to the data
+      } else { tmp <- mat2^bc.exp[k] }
+      #
+      tmp2 <- dagnelie.test(tmp)
+      if((max(tmp2$D)-min(tmp2$D)) < epsilon)
+        stop("All D values are equal, Dagnelie's test cannot be computed. ",
+             "Check the data.", call. = FALSE)
+      res[k,2] <- tmp2$Shapiro.Wilk$statistic
+      res[k,3] <- tmp2$Shapiro.Wilk$p.value
+      if(chord) {
+        # Apply the chord transformation to matrix "tmp"
+        row.norms <- apply(tmp, 1, vec.norm)
+        mat3 <- sweep(tmp, 1, row.norms, "/")
+        tmp2 <- dagnelie.test(mat3)
+        res[k,4] <- tmp2$Shapiro.Wilk$statistic
+        res[k,5] <- tmp2$Shapiro.Wilk$p.value
+      }
+    }
+    res
+  }
 
 #------------------ WORKFLOW FUNCTIONS -------------------------------------------
 # in_sp_dt <- tar_read(rawdata_sp)
@@ -9,15 +157,18 @@
 format_spdata <- function(in_sp_dt) {
   skim(in_sp_dt)
   
-  spcols <- which(sapply(
-    in_sp_dt[, -c('caso', 'total')], 
-    is.numeric))
+  spcols <- names(
+    which(sapply(
+      in_sp_dt[, -c('caso', 'total')], 
+      is.numeric))
+  )
   
   in_sp_dt %>%
     setnames('estado_deFlujo', 'estado_de_flujo')
   
   in_sp_dt[, total_relative := 100*total/max(total), by=sitio] %>% #Compute relative total abundance (compared to max at that site)
-    .[, taxo_richness := rowSums(.SD>0, na.rm=T), .SDcols=names(spcols)] #Compute taxonomic richess
+    .[, taxo_richness := rowSums(.SD>0, na.rm=T), 
+      .SDcols=spcols] #Compute taxonomic richess
   
   return(in_sp_dt)
   
@@ -174,7 +325,7 @@ plot_envdata <- function(in_env_dt) {
                              'estado_de_flujo'))
   
   env_boxplots_bysites <- ggplot(env_melt,
-                         aes(x=sitio, y=value)) +
+                                 aes(x=sitio, y=value)) +
     geom_jitter(aes(color=estado_de_flujo)) +
     geom_boxplot(alpha=1/2) +
     facet_wrap(~variable, scales='free') +
@@ -182,18 +333,36 @@ plot_envdata <- function(in_env_dt) {
     theme(axis.text.x = element_text(size=7, angle=30))
   
   env_distribs_plot <- ggplot(env_melt,
-                        aes(x=value)) +
+                              aes(x=value)) +
     geom_histogram() +
     facet_wrap(~variable, scales='free') +
     theme_bw() 
   
+  estado_de_flujo_ts <- in_env_dt[, list(
+    estado_de_flujo = .SD[, .N, by=estado_de_flujo]$estado_de_flujo,
+    rel_freq = .SD[, .N, by=estado_de_flujo]$N/.N), 
+    by=fecha] %>%
+    merge(expand.grid(c(paste0('fecha', seq(1,6))),
+                      c('F', 'IP', 'D')),
+          by.x=c('fecha', 'estado_de_flujo'),
+          by.y=c('Var1', 'Var2'),
+          all.y=T
+    ) %>%
+    .[is.na(rel_freq), rel_freq := 0]
+          
+  estado_de_flujo_tsplot <- ggplot(data=estado_de_flujo_ts) +
+    geom_area(aes(x=fecha, y=rel_freq, fill=estado_de_flujo, group=estado_de_flujo),
+              position='stack') +
+    coord_cartesian(expand=c(0,0)) +
+    theme_classic()
+  
   return(list(
     env_boxplots_bysites = env_boxplots_bysites,
-    env_distribs_plot = env_distribs_plot
-    )  
-  )
+    env_distribs_plot = env_distribs_plot,
+    estado_de_flujo_ts = estado_de_flujo_ts,
+    estado_de_flujo_tsplot = estado_de_flujo_tsplot
+  ))
 }
-
 
 #--- fix_net_dangles --------------
 fix_net_dangles <- function(in_net, in_tolerance, IDcol='OBJECTID_1') {
@@ -519,7 +688,7 @@ compute_envdist <- function(in_env_dt, IDcol) {
     round(
       cor(env_dt_norm, use='pairwise.complete.obs'), 
       2)
-    )
+  )
   
   #Compute Gower's distance
   #With each category of variable weighted by 1
@@ -555,25 +724,25 @@ compute_envdist <- function(in_env_dt, IDcol) {
   )
   
   env_dist_unweighted <- cluster::daisy(env_dt_norm, 
-                                      metric = 'gower',
-                                      weights = c(
-                                        1/2, #AH_max_sqrt
-                                        1, #pH
-                                        1/2, #conductivity_esp
-                                        1, #oxigen_sat
-                                        1/2, #TDS
-                                        1/2, #AH_med_sqrt
-                                        1, #prof_med_sqrt
-                                        1, #veloc_med_sqrt
-                                        1, #altura
-                                        1, #pendiente
-                                        1, #orden
-                                        1, #caudal_log10
-                                        1, #bloque
-                                        1, #piedra
-                                        1, #grava
-                                        1 #arena
-                                      )
+                                        metric = 'gower',
+                                        weights = c(
+                                          1/2, #AH_max_sqrt
+                                          1, #pH
+                                          1/2, #conductivity_esp
+                                          1, #oxigen_sat
+                                          1/2, #TDS
+                                          1/2, #AH_med_sqrt
+                                          1, #prof_med_sqrt
+                                          1, #veloc_med_sqrt
+                                          1, #altura
+                                          1, #pendiente
+                                          1, #orden
+                                          1, #caudal_log10
+                                          1, #bloque
+                                          1, #piedra
+                                          1, #grava
+                                          1 #arena
+                                        )
   )
   
   return(list(
@@ -582,11 +751,198 @@ compute_envdist <- function(in_env_dt, IDcol) {
   ))
 }
 
-#----- Compute alpha diversity for each site and year -------------------------
+#----- Compute spatial beta diversity for each date ---------------------------
+#in_sp_dt <- tar_read(sp_dt)
+compute_spatial_beta <- function(in_sp_dt) {
+  #----- Prepare data ----------------------------------------------------------
+  #Shroeder and Jenkins for choice of indices
+  #Add some based on Anderson et al. 2011
+  spcols <- names(
+    which(sapply(
+      in_sp_dt[, -c('caso', 'total', 'total_relative', 'taxo_richness')], 
+      is.numeric))
+  )
+  
+  # ggplot(data=melt(in_sp_dt[, spcols, with=F])) +
+  #   geom_histogram(aes(x=value)) +
+  #   scale_x_sqrt()
+  
+  #----- Jaccard Index for presence-absence by fecha ---------------------------
+  presabs_dt <- in_sp_dt[, lapply(.SD, function(x) {as.numeric(x > 0)}),
+                         .SDcols= spcols] %>%
+    cbind(in_sp_dt[,c('caso', 'fecha'), with=F])
+  
+  jaccard_mats <- lapply(unique(presabs_dt$fecha), function(t) {
+    subdt <- presabs_dt[fecha == t,]
+    jaccard_dist <- vegan::vegdist(subdt[fecha == t, spcols, with=F],
+                                   method = 'jaccard', diag=T)
+    jaccard_mat <- as.matrix(jaccard_dist)
+    jaccard_mat[upper.tri(jaccard_mat)] <- NA
+    colnames(jaccard_mat) <- subdt$caso
+    rownames(jaccard_mat) <- subdt$caso
+    
+    return(jaccard_mat)
+  })
+  names(jaccard_mats) <- unique(presabs_dt$fecha)
+  
+  #----- pres-abs-based total beta diversity, turnover and nestedness by fecha -----
+  beta_jaccard <- lapply(unique(presabs_dt$fecha), function(t) {
+    subdt <- presabs_dt[fecha == t,]
+    sub_dist_jac <- betapart.core(subdt[, spcols, with=F]) %>%
+      beta.multi(index.family="jac")
+    return(sub_dist_jac)
+  }) %>%
+    rbindlist %>%
+    .[, fecha := unique(presabs_dt$fecha)]
+  
+  #----- Bray–Curtis dissimilarity distance (untransformed) by fecha -----------
+  bray_mats <- lapply(unique(in_sp_dt$fecha), function(t) {
+    subdt <- in_sp_dt[fecha == t,]
+    bray_dist <- vegan::vegdist(subdt[fecha == t, spcols, with=F],
+                                method = 'bray', diag=T)
+    bray_mat <- as.matrix(bray_dist)
+    bray_mat[upper.tri(bray_mat)] <- NA
+    colnames(bray_mat) <- subdt$caso
+    rownames(bray_mat) <- subdt$caso
+    
+    return(bray_mat)
+  })
+  names(bray_mats) <- unique(in_sp_dt$fecha)
+  
+  #----- Abundance-based total beta diversity, turnover and nestedness -----
+  beta_bray <- lapply(unique(in_sp_dt$fecha), function(t) {
+    #fourth-root transform
+    
+    subdt <- in_sp_dt[fecha == t,]
+    sub_dist_bray <- betapart.core.abund(subdt[, spcols, with=F]) %>%
+      beta.multi.abund(index.family="bray")
+    return(sub_dist_bray)
+  }) %>%
+    rbindlist %>%
+    .[, fecha := unique(in_sp_dt$fecha)]
+
+  #----- nMDS with Bray-Curtis -------------------------------------------------
+  nmds_bray <- metaMDS(as.matrix(in_sp_dt[total !=0, spcols, with=F]),
+                       distance = "bray", trymax=200, autotransform=T)
+  
+  nmds_bray_dt <- cbind(in_sp_dt[total !=0, -spcols, with=F],
+                        nmds_bray$points
+  )
+  
+  (nmds_bray_dt)
+  
+  #----- Chord dissimilarity matrix across all sites and dates -----------------
+  #Determine Best Box-Cox+chord transformation coefficient
+  best_bc_chord_exponent <- BCD(in_sp_dt[total!=0, spcols, with=F]) %>%
+    as.data.table %>%
+    .[which.max(BC.chord_W), BC.exp]
+  
+  #Compute transformation
+  sp_chord <- box.cox.chord(mat = in_sp_dt[total!=0, spcols, with=F], 
+                            bc.exp=best_bc_chord_exponent) 
+  
+  #Check output
+  # ggplot(data=melt(sp_chord)) +
+  #   geom_histogram(aes(x=value)) 
+  
+  #Compute box-chord distance
+  sp_chord_dist <- dist(sp_chord) %>% 
+    as.matrix
+  rownames(sp_chord_dist) <- in_sp_dt[total!=0, caso]
+  colnames(sp_chord_dist) <- in_sp_dt[total!=0, caso]
+  
+  #----- Chord dissimilarity matrix across all sites and dates -----------------
+  chord_abundance_pca <- prcomp(x= sp_chord)
+  screeplot(chord_abundance_pca)
+  summary(chord_abundance_pca) #First 2 PCs capture only 22% of variance, first 4 capture 36% -- weak PCA
+  
+  pca_chord_dt <- cbind(
+    in_sp_dt[total!=0, -spcols, with=F],
+    scores(chord_abundance_pca)[, c('PC1', 'PC2', 'PC3')]
+  )
+  
+  #----- Extra stuff ---------------------------------------
+  # %>%
+  #   merge(in_sp_dt[, c('caso', 'cuenca', 'sitio', 'fecha', 'intermitencia',
+  #                      'estado_de_flujo', 'total', 'taxo_richness'),
+  #                  with = F],
+  #         by.x = 'caso.x', by.y='caso') %>%
+  #   merge(in_sp_dt[, c('caso', 'cuenca', 'sitio', 'fecha', 'intermitencia',
+  #                      'estado_de_flujo', 'total', 'taxo_richness'),
+  #                  with = F],
+  #         by.x = 'caso.y', by.y='caso')
+  
+  return(list(
+    jaccard_mats = jaccard_mats,
+    beta_jaccard = beta_jaccard,
+    bray_mats = bray_mats,
+    beta_bray = beta_bray,
+    nmds_bray_dt =  nmds_bray_dt,
+    sp_chord_dist = sp_chord_dist,
+    chord_abundance_pca = chord_abundance_pca,
+    pca_chord_dt = pca_chord_dt
+  ))
+} 
+#----- Plot spatial beta div --------------------------------------------------
+#in_spatial_beta <- tar_read(spatial_beta)
+
+plot_spatial_beta <- function(in_spatial_beta) {
+  
+  #Plot beta diversity and its components over time based on pres-abs Jaccard
+  beta_jaccard_melt <- in_spatial_beta$beta_jaccard %>%
+    melt(id.vars='fecha')
+  
+  plot_beta_jaccard_fecha <- ggplot() +
+    geom_area(data = beta_jaccard_melt[variable != 'beta.JAC'],
+              aes(x=fecha, y=value, 
+                  position = 'stack',
+                  fill=variable, group=variable)) +
+    geom_line(data = beta_jaccard_melt[variable == 'beta.JAC'],
+              aes(x=fecha, y=value, group=variable, color=variable),
+              size=2) + 
+    coord_cartesian(expand=c(0,0)) +
+    theme_classic() + 
+    theme(legend.title = element_blank())
+  
+  #Plot beta diversity and its components over time based on abundance Bray-Curtis
+  beta_bray_melt <- in_spatial_beta$beta_bray %>%
+    melt(id.vars='fecha')
+  
+  plot_beta_bray_fecha <- ggplot() +
+    geom_area(data = beta_bray_melt[variable != 'beta.BRAY'],
+              aes(x=fecha, y=value, 
+                  position = 'stack',
+                  fill=variable, group=variable)) +
+    geom_line(data = beta_bray_melt[variable == 'beta.BRAY'],
+              aes(x=fecha, y=value, group=variable, color=variable),
+              size=2) + 
+    coord_cartesian(expand=c(0,0)) +
+    theme_classic() + 
+    theme(legend.title = element_blank())
+  
+  #Plot trajectories
+  #MDS for Bray-Curtis
+  ggplot(data=in_spatial_beta$nmds_bray_dt[intermitencia=='isolpool',],
+         aes(x=MDS1, y=MDS2, color=estado_de_flujo)) +
+    geom_point() +
+    geom_line(aes(group=sitio))
+  
+  plot_nMDS_time <- ggplot(data=in_spatial_beta$nmds_bray_dt,
+                           aes(x=MDS1, y=MDS2, 
+                               shape=estado_de_flujo, color=intermitencia)) +
+    geom_point(size=4, alpha=0.85) +
+    facet_wrap(~fecha) +
+    theme_classic()
+  
+  
+}
 
 
-#----- Compute spatial beta diversity for each year ---------------------------
-#Pairwise Bray–Curtis dissimilarity distance
+
+#----- Compute nMDS trajectories for each site over time ----------------------
+#nMDS across all sites and dates
+#then plot
+
 
 #----- Compute temporal beta diversity for each site --------------------------
 
@@ -595,6 +951,3 @@ compute_envdist <- function(in_env_dt, IDcol) {
 #Total number of genera
 #Total number of family
 
-#----- Compute nMDS trajectories for each site over time ----------------------
-#nMDS across all sites and dates
-#then plot
