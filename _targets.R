@@ -11,7 +11,6 @@ overwrite <- T
 
 #Inspect data
 list(
-  #Download h90 basins
   tar_target(
     rawdata_path,
     file.path(datadir, 'alltaxa.xls')
@@ -19,13 +18,13 @@ list(
   ,
   
   tar_target(
-    net_shp_path,
+    net_path,
     file.path(datadir, 'MatrixNaborA', 'FNetRiver.shp')
   )
   ,
   
   tar_target(
-    sites_shp_path,
+    sites_path,
     file.path(datadir, 'MatrixNaborA', 'FSites.shp')
   )
   ,
@@ -59,7 +58,7 @@ list(
     spenv_dt,
     merge(sp_dt,
           env_dt[, c('caso', 
-                     names(.SD)[!(names(.SD) %in% names(sp_dt))]),
+                     names(env_dt)[!(names(env_dt) %in% names(sp_dt))]),
                  with=F], 
           by='caso')
   )
@@ -79,7 +78,7 @@ list(
   
   tar_target(
     net_formatted,
-    fix_net_dangles(in_net = net_shp_path,
+    fix_net_dangles(in_net = net_path,
                     in_tolerance = 7) %>%
       dplyr::mutate(length = as.numeric(st_length(.))) %>%
       .[st_is_valid(.),]
@@ -88,7 +87,7 @@ list(
   #Snap sites
   tar_target(
     sites_snapped_path,
-    snap_sites(in_sites_point_path = sites_shp_path,
+    snap_sites(in_sites_point_path = sites_path,
                in_sitesSQL="",
                in_segments = net_formatted,
                out_path = sites_snapped_out,
@@ -132,13 +131,22 @@ list(
       in_sp_dt = sp_dt
     )
   )
+  ,
+
+  tar_target(
+    spatial_beta_plots,
+    plot_spatial_beta(
+      in_spatial_beta = spatial_beta
+    )
+  )
   # ,
   # 
   # tar_target(
-  #   spatial_beta_plots,
-  #   plot_spatial_beta(
-  #     in_spatial_beta = spatial_beta
-  #   )
+  #   mantel_test_list,
+  #   compute_mantel(in_spatial_beta = spatial_beta,
+  #                  in_env_dist = env_dist,
+  #                  in_euc_dist = euc_dist,
+  #                  in_net_dist = net_dist)
   # )
 )
 
