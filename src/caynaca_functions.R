@@ -167,8 +167,12 @@ format_spdata <- function(in_sp_dt) {
     setnames('estado_deFlujo', 'estado_de_flujo')
   
   in_sp_dt[, total_relative := 100*total/max(total), by=sitio] %>% #Compute relative total abundance (compared to max at that site)
-    .[, taxo_richness := rowSums(.SD>0, na.rm=T), 
+    .[, alpha_div := rowSums(.SD>0, na.rm=T), 
       .SDcols=spcols] #Compute taxonomic richess
+  
+  in_sp_dt[, gamma_div := melt(.SD)[value > 0,][!duplicated(variable), .N],
+           .SDcols = spcols,
+           by=fecha]
   
   return(in_sp_dt)
   
@@ -269,14 +273,29 @@ plot_spdata <- function(in_spenv_dt, in_sp_dt) {
   
   #Line plot of richness over time 
   #by site, colored by site's intermittency status
-  plot_richness_vs_time <- ggplot(in_spenv_dt, 
-                                  aes(x=fecha, y=taxo_richness)
+  plot_richness_vs_time <- ggplot(in_sp_dt, 
+                                  aes(x=fecha)
   )+ 
-    geom_line(aes(color=intermitencia, group=sitio)) + 
-    geom_smooth(aes(x=as.numeric(factor(fecha)), color=intermitencia), 
+    geom_line(data=in_sp_dt[!duplicated(fecha),],
+              aes(x=fecha, y=gamma_div, group=cuenca, 
+                  lty=cuenca), color='black',
+              linewidth=1.5) +
+    geom_line(aes(y=alpha_div, color=intermitencia, group=sitio)) + 
+    geom_smooth(aes(x=as.numeric(factor(fecha)), y=alpha_div,
+                    color=intermitencia), 
                 linewidth=2, span=0.5, se=F
     ) +
-    coord_cartesian(ylim=c(0,40), expand=c(0,0), clip="off") + 
+    scale_y_continuous(name='Diversity') +
+    scale_linetype(name='', labels=c('Gamma diversity')) +
+    scale_color_manual(
+      name = stringr::str_wrap('Alpha diversity by long-term flow regime', 30),
+      values = c('#d73027', '#fdb863', '#4575b4'),
+      labels = c('Intermittent: dry',
+                 'Intermittent: disconnected pools',
+                 'Perennial')) +
+    guides(linetype = guide_legend(order = 1), 
+           colour = guide_legend(order = 2)) +
+    coord_cartesian(ylim=c(0,65), expand=c(0,0), clip="off") + 
     theme_bw() 
   
   #Scatterplot of relative abundance against relative channel cross section area
@@ -349,7 +368,7 @@ plot_envdata <- function(in_env_dt) {
           all.y=T
     ) %>%
     .[is.na(rel_freq), rel_freq := 0]
-          
+  
   estado_de_flujo_tsplot <- ggplot(data=estado_de_flujo_ts) +
     geom_area(aes(x=fecha, y=rel_freq, fill=estado_de_flujo, group=estado_de_flujo),
               position='stack') +
@@ -583,7 +602,10 @@ compute_eucdist <- function(in_sites_path, IDcol) {
   distmat <- terra::distance(x=sites, y=sites)
   rownames(distmat) <- colnames(distmat) <- sites[[IDcol]][[1]]
   
-  return(distmat)
+  return(list(
+    xy = geom(sites)[, c('x','y')],
+    distmat = distmat
+  ))
 }
 
 
@@ -746,12 +768,12 @@ compute_envdist <- function(in_env_dt, IDcol) {
   )
   
   return(list(
-    env_dist_weighted,
-    env_dist_unweighted
+    gow_dist_weighted = env_dist_weighted,
+    gow_dist_unweighted = env_dist_unweighted
   ))
 }
 
-#----- Compute spatial beta diversity for each date ---------------------------
+#--- Compute spatial beta diversity for each date ---------------------------
 #in_sp_dt <- tar_read(sp_dt)
 compute_spatial_beta <- function(in_sp_dt) {
   #----- Prepare data ----------------------------------------------------------
@@ -759,7 +781,7 @@ compute_spatial_beta <- function(in_sp_dt) {
   #Add some based on Anderson et al. 2011
   spcols <- names(
     which(sapply(
-      in_sp_dt[, -c('caso', 'total', 'total_relative', 'taxo_richness')], 
+      in_sp_dt[, -c('caso', 'total', 'total_relative', 'alpha_div', 'gamma_div')], 
       is.numeric))
   )
   
@@ -770,38 +792,57 @@ compute_spatial_beta <- function(in_sp_dt) {
   #----- Jaccard Index for presence-absence by fecha ---------------------------
   presabs_dt <- in_sp_dt[, lapply(.SD, function(x) {as.numeric(x > 0)}),
                          .SDcols= spcols] %>%
-    cbind(in_sp_dt[,c('caso', 'fecha'), with=F])
+    cbind(in_sp_dt[,c('caso', 'fecha', 'presencia'), with=F])
   
   jaccard_mats <- lapply(unique(presabs_dt$fecha), function(t) {
     subdt <- presabs_dt[fecha == t,]
     jaccard_dist <- vegan::vegdist(subdt[fecha == t, spcols, with=F],
-                                   method = 'jaccard', diag=T)
+                                   method = 'jaccard', diag=T, upper=T)
     jaccard_mat <- as.matrix(jaccard_dist)
-    jaccard_mat[upper.tri(jaccard_mat)] <- NA
+    #jaccard_mat[upper.tri(jaccard_mat)] <- NA
     colnames(jaccard_mat) <- subdt$caso
     rownames(jaccard_mat) <- subdt$caso
-    
+  
     return(jaccard_mat)
   })
   names(jaccard_mats) <- unique(presabs_dt$fecha)
   
-  #----- pres-abs-based total beta diversity, turnover and nestedness by fecha -----
+  #----- pres-abs-based total beta diversity, turnover and nestedness by fecha (Baselga) -----
+  # beta_jaccard <- lapply(unique(presabs_dt$fecha), function(t) {
+  #   subdt <- presabs_dt[fecha == t,]
+  #   sub_dist_jac <- betapart.core(subdt[, spcols, with=F]) %>%
+  #     beta.multi(index.family="jac")
+  #   return(sub_dist_jac)
+  # }) %>%
+  #   rbindlist %>%
+  #   .[, fecha := unique(presabs_dt$fecha)]
+  
+  #----- pres-abs-based total beta diversity, replacement and richness difference (Legendre) -----
   beta_jaccard <- lapply(unique(presabs_dt$fecha), function(t) {
     subdt <- presabs_dt[fecha == t,]
-    sub_dist_jac <- betapart.core(subdt[, spcols, with=F]) %>%
-      beta.multi(index.family="jac")
+    sub_dist_jac <- beta.div.comp(subdt[presencia=='si', 
+                                        spcols, with=F],
+                                  coef = 'J', quant = F) 
+    
     return(sub_dist_jac)
-  }) %>%
+  })
+  
+  beta_jaccard_dt <- lapply(beta_jaccard, 
+                            function(out) as.data.table(t(out$part))) %>%
     rbindlist %>%
     .[, fecha := unique(presabs_dt$fecha)]
   
+  
   #----- Bray–Curtis dissimilarity distance (untransformed) by fecha -----------
   bray_mats <- lapply(unique(in_sp_dt$fecha), function(t) {
-    subdt <- in_sp_dt[fecha == t,]
+    subdt <- in_sp_dt[fecha == t, ]%>%
+      .[, (spcols) := sapply(.SD, simplify=F,
+                             function(x) x^(1/5)),
+        .SDcols = spcols]
     bray_dist <- vegan::vegdist(subdt[fecha == t, spcols, with=F],
-                                method = 'bray', diag=T)
+                                method = 'bray', diag=T, upper=T)
     bray_mat <- as.matrix(bray_dist)
-    bray_mat[upper.tri(bray_mat)] <- NA
+    #bray_mat[upper.tri(bray_mat)] <- NA
     colnames(bray_mat) <- subdt$caso
     rownames(bray_mat) <- subdt$caso
     
@@ -809,27 +850,62 @@ compute_spatial_beta <- function(in_sp_dt) {
   })
   names(bray_mats) <- unique(in_sp_dt$fecha)
   
-  #----- Abundance-based total beta diversity, turnover and nestedness -----
-  beta_bray <- lapply(unique(in_sp_dt$fecha), function(t) {
-    #fourth-root transform
-    
+  # #----- Abundance-based total beta diversity and decomposition (Baselga) -----
+  # beta_bray <- lapply(unique(in_sp_dt$fecha), function(t) {
+  #   subdt <- in_sp_dt[fecha == t,]
+  #   sub_dist_bray <- betapart.core.abund(subdt[, spcols, with=F]) %>%
+  #     beta.multi.abund(index.family="bray")
+  #   return(sub_dist_bray)
+  # }) %>%
+  #   rbindlist %>%
+  #   .[, fecha := unique(in_sp_dt$fecha)]
+  
+  #----- Abundance-based total beta diversity and decomposition (Legendre - NOT transformed) -----
+  beta_ruzicka <- lapply(unique(in_sp_dt$fecha), function(t) {
     subdt <- in_sp_dt[fecha == t,]
-    sub_dist_bray <- betapart.core.abund(subdt[, spcols, with=F]) %>%
-      beta.multi.abund(index.family="bray")
-    return(sub_dist_bray)
-  }) %>%
+    sub_dist_ruzicka  <- beta.div.comp(subdt[presencia=='si',
+                                             (spcols), with=F],
+                                       coef = 'J', quant = T
+    )
+    return(sub_dist_ruzicka)
+  })
+  
+  
+  beta_ruzicka_dt <- lapply(beta_ruzicka, 
+                            function(out) as.data.table(t(out$part))) %>%
     rbindlist %>%
     .[, fecha := unique(in_sp_dt$fecha)]
-
+  
+  #----- Abundance-based total beta diversity and decomposition (Legendre - 5th rt transformed) -----
+  beta_ruzicka_trans <- lapply(unique(in_sp_dt$fecha), function(t) {
+    subdt <- in_sp_dt[fecha == t,] %>%
+      .[, (spcols) := sapply(.SD, simplify=F,
+                             function(x) x^(1/5)),
+        .SDcols = spcols]
+    sub_dist_ruzicka  <- beta.div.comp(subdt[presencia=='si',
+                                             (spcols), with=F],
+                                       coef = 'J', quant = T
+    )
+    return(sub_dist_ruzicka)
+  })
+  
+  
+  beta_ruzicka_trans_dt <- lapply(beta_ruzicka_trans, 
+                                  function(out) as.data.table(t(out$part))) %>%
+    rbindlist %>%
+    .[, fecha := unique(in_sp_dt$fecha)]
+  
   #----- nMDS with Bray-Curtis -------------------------------------------------
-  nmds_bray <- metaMDS(as.matrix(in_sp_dt[total !=0, spcols, with=F]),
-                       distance = "bray", trymax=200, autotransform=T)
+  nmds_bray <- in_sp_dt[total !=0, spcols, with=F] %>%
+    vegan::vegdist(method = 'bray') %>%
+    metaMDS( distance = "bray", trymax=500, maxit=999,
+             autotransform=T)
+  
+  print(nmds_bray)
   
   nmds_bray_dt <- cbind(in_sp_dt[total !=0, -spcols, with=F],
                         nmds_bray$points
   )
-  
-  (nmds_bray_dt)
   
   #----- Chord dissimilarity matrix across all sites and dates -----------------
   #Determine Best Box-Cox+chord transformation coefficient
@@ -864,90 +940,327 @@ compute_spatial_beta <- function(in_sp_dt) {
   #----- Extra stuff ---------------------------------------
   # %>%
   #   merge(in_sp_dt[, c('caso', 'cuenca', 'sitio', 'fecha', 'intermitencia',
-  #                      'estado_de_flujo', 'total', 'taxo_richness'),
+  #                      'estado_de_flujo', 'total', 'alpha_div'),
   #                  with = F],
   #         by.x = 'caso.x', by.y='caso') %>%
   #   merge(in_sp_dt[, c('caso', 'cuenca', 'sitio', 'fecha', 'intermitencia',
-  #                      'estado_de_flujo', 'total', 'taxo_richness'),
+  #                      'estado_de_flujo', 'total', 'alpha_div'),
   #                  with = F],
   #         by.x = 'caso.y', by.y='caso')
   
+  #--- Function outputs ------------
   return(list(
+    presabs_dt = presabs_dt,
     jaccard_mats = jaccard_mats,
     beta_jaccard = beta_jaccard,
+    beta_jaccard_dt = beta_jaccard_dt,
     bray_mats = bray_mats,
-    beta_bray = beta_bray,
+    #beta_bray = beta_bray,
+    beta_ruzicka = beta_ruzicka,
+    beta_ruzicka_dt = beta_ruzicka_dt,
+    beta_ruzicka_trans = beta_ruzicka_trans,
+    beta_ruzicka_trans_dt = beta_ruzicka_trans_dt,
+    nmds_bray = nmds_bray,
     nmds_bray_dt =  nmds_bray_dt,
     sp_chord_dist = sp_chord_dist,
     chord_abundance_pca = chord_abundance_pca,
     pca_chord_dt = pca_chord_dt
   ))
 } 
-#----- Plot spatial beta div --------------------------------------------------
+#--- Plot spatial beta div --------------------------------------------------
 #in_spatial_beta <- tar_read(spatial_beta)
 
 plot_spatial_beta <- function(in_spatial_beta) {
   
   #Plot beta diversity and its components over time based on pres-abs Jaccard
-  beta_jaccard_melt <- in_spatial_beta$beta_jaccard %>%
-    melt(id.vars='fecha')
+  beta_jaccard_melt <- in_spatial_beta$beta_jaccard_dt %>%
+    melt(id.vars='fecha') %>%
+    .[variable %in% c('BDtotal', 'Repl', 'RichDif'),]
   
   plot_beta_jaccard_fecha <- ggplot() +
-    geom_area(data = beta_jaccard_melt[variable != 'beta.JAC'],
+    geom_area(data = beta_jaccard_melt[variable != 'BDtotal'],
               aes(x=fecha, y=value, 
                   position = 'stack',
                   fill=variable, group=variable)) +
-    geom_line(data = beta_jaccard_melt[variable == 'beta.JAC'],
+    geom_line(data = beta_jaccard_melt[variable == 'BDtotal'],
               aes(x=fecha, y=value, group=variable, color=variable),
-              size=2) + 
+              size=1) + 
+    scale_color_manual(values ='black',
+                       labels = 'Total beta diversity') +
+    scale_fill_discrete(labels=c('Replacement', 'Richness difference')) +
+    scale_x_discrete(name='Date') +
+    scale_y_continuous(limits=c(0,1), 
+                       name='Value') +
     coord_cartesian(expand=c(0,0)) +
     theme_classic() + 
     theme(legend.title = element_blank())
   
-  #Plot beta diversity and its components over time based on abundance Bray-Curtis
-  beta_bray_melt <- in_spatial_beta$beta_bray %>%
-    melt(id.vars='fecha')
+  # #Plot beta diversity and its components over time based on abundance Bray-Curtis
+  # beta_bray_melt <- in_spatial_beta$beta_bray %>%
+  #   melt(id.vars='fecha')
+  # 
+  # plot_beta_bray_fecha <- ggplot() +
+  #   geom_area(data = beta_bray_melt[variable != 'BDtotal'],
+  #             aes(x=fecha, y=100*value, 
+  #                 position = 'stack',
+  #                 fill=variable, group=variable)) +
+  #   geom_line(data = beta_bray_melt[variable == 'BDtotal'],
+  #             aes(x=fecha, y=100*value, group=variable, color=variable),
+  #             size=1) + 
+  #   scale_color_manual(values ='black',
+  #                      labels = 'Total beta diversity') +
+  #   scale_fill_discrete(labels=c('Replacement',
+  #                                'Richness difference')) +
+  #   scale_x_discrete(name='Date') +
+  #   scale_y_continuous(limits=c(0,100), 
+  #                      name='Value') +
+  #   coord_cartesian(expand=c(0,0)) +
+  #   theme_classic() + 
+  #   theme(legend.title = element_blank())
   
-  plot_beta_bray_fecha <- ggplot() +
-    geom_area(data = beta_bray_melt[variable != 'beta.BRAY'],
-              aes(x=fecha, y=value, 
+  #Plot beta diversity and its components over time based on abundance Ruzicka
+  beta_ruzicka_melt <- in_spatial_beta$beta_ruzicka_dt %>%
+    melt(id.vars='fecha') %>%
+    .[variable %in% c('BDtotal', 'Repl', 'RichDif'),]
+  
+  plot_beta_ruzicka_fecha <- ggplot() +
+    geom_area(data = beta_ruzicka_melt[variable != 'BDtotal'],
+              aes(x=fecha, y=value,
                   position = 'stack',
                   fill=variable, group=variable)) +
-    geom_line(data = beta_bray_melt[variable == 'beta.BRAY'],
+    geom_line(data = beta_ruzicka_melt[variable == 'BDtotal'],
               aes(x=fecha, y=value, group=variable, color=variable),
-              size=2) + 
+              size=1) +
+    scale_color_manual(values ='black',
+                       labels = 'Total beta diversity') +
+    scale_fill_discrete(labels=c('Replacement',
+                                 'Richness difference')) +
+    scale_x_discrete(name='Date') +
+    scale_y_continuous(limits=c(0,1),
+                       name='Value') +
     coord_cartesian(expand=c(0,0)) +
-    theme_classic() + 
+    theme_classic() +
+    theme(legend.title = element_blank())
+  
+  #Plot beta diversity and its components over time based on abundance Ruzicka (after transforming data)
+  beta_ruzicka_trans_melt <- in_spatial_beta$beta_ruzicka_trans_dt %>%
+    melt(id.vars='fecha') %>%
+    .[variable %in% c('BDtotal', 'Repl', 'RichDif'),]
+  
+  plot_beta_ruzicka_trans_fecha <- ggplot() +
+    geom_area(data = beta_ruzicka_trans_melt[variable != 'BDtotal'],
+              aes(x=fecha, y=value,
+                  position = 'stack',
+                  fill=variable, group=variable)) +
+    geom_line(data = beta_ruzicka_trans_melt[variable == 'BDtotal'],
+              aes(x=fecha, y=value, group=variable, color=variable),
+              size=1) +
+    scale_color_manual(values ='black',
+                       labels = 'Total beta diversity') +
+    scale_fill_discrete(labels=c('Replacement',
+                                 'Richness difference')) +
+    scale_x_discrete(name='Date') +
+    scale_y_continuous(limits=c(0,1),
+                       name='Value') +
+    coord_cartesian(expand=c(0,0)) +
+    theme_classic() +
     theme(legend.title = element_blank())
   
   #Plot trajectories
-  #MDS for Bray-Curtis
-  ggplot(data=in_spatial_beta$nmds_bray_dt[intermitencia=='isolpool',],
-         aes(x=MDS1, y=MDS2, color=estado_de_flujo)) +
-    geom_point() +
-    geom_line(aes(group=sitio))
+  #nMDS for Bray-Curtis
+  # ggplot(data=in_spatial_beta$nmds_bray_dt[intermitencia=='isolpool',],
+  #        aes(x=MDS1, y=MDS2, color=estado_de_flujo)) +
+  #   geom_point() +
+  #   geom_line(aes(group=sitio))
   
-  plot_nMDS_time <- ggplot(data=in_spatial_beta$nmds_bray_dt,
-                           aes(x=MDS1, y=MDS2, 
-                               shape=estado_de_flujo, color=intermitencia)) +
-    geom_point(size=4, alpha=0.85) +
+  nMDS_dt_forplot <- in_spatial_beta$nmds_bray_dt %>%
+    merge(
+      setnames(
+        expand.grid(c(paste0('fecha', seq(1,6))),
+                    unique(.$sitio)),
+        c('fecha', 'sitio')
+      ),
+      by=c('fecha', 'sitio'),
+      all.y=T
+    ) %>%
+    .[, `:=`(MDS1_lag = lag(MDS1),
+             MDS2_lag = lag(MDS2),
+             estado_de_flujo_lag = lag(estado_de_flujo)),
+      by=sitio]
+  
+  nMDS_dt_forplot
+  
+  plot_nmds_time <- ggplot() +
+    geom_point(data= nMDS_dt_forplot,
+               aes(x = MDS1_lag, y = MDS2_lag, 
+                   shape=estado_de_flujo_lag),
+               color = 'grey',
+               size=4, alpha=0.5) +
+    geom_point(data = nMDS_dt_forplot[is.na(MDS1),],
+               aes(x = MDS1_lag, y = MDS2_lag, 
+                   shape=estado_de_flujo_lag),
+               color = 'black',
+               size=4, alpha=0.4) +
+    geom_segment(data= nMDS_dt_forplot,
+                 aes(x=MDS1_lag, xend=MDS1,
+                     y=MDS2_lag, yend=MDS2),
+                 color = 'grey', alpha=0.5) +
+    geom_point(data= nMDS_dt_forplot,
+               aes(x = MDS1, y = MDS2, 
+                   shape=estado_de_flujo, color=intermitencia),
+               size=4, alpha=0.85) +
+    scale_shape_discrete(name='Flow state at time step',
+                         labels = c('Flowing',
+                                    'Disconnected pools',
+                                    '')) +
+    scale_color_manual(name='Long-term flow regime',
+                       values = c('#d73027', '#fee090', '#4575b4', '#ffffff'),
+                       labels = c('Intermittent: dry',
+                                  'Intermittent: disconnected pools',
+                                  'Perennial',
+                                  '')) +
+    scale_x_continuous(name = 'MDS1') +
+    scale_y_continuous(name = 'MDS2') + 
+    coord_fixed() +
     facet_wrap(~fecha) +
     theme_classic()
   
-  
+  return(list(
+    plot_beta_jaccard_fecha = plot_beta_jaccard_fecha,
+    plot_beta_ruzicka_fecha = plot_beta_ruzicka_fecha,
+    plot_beta_ruzicka_trans_fecha = plot_beta_ruzicka_trans_fecha,
+    plot_nmds_time = plot_nmds_time
+  ))
 }
 
 
+#--- Compute mantel test -----------------------------------------------------
+# in_spenv_dt = tar_read(spenv_dt)
+# in_spatial_beta = tar_read(spatial_beta)
+# in_env_dist = tar_read(env_dist)
+# in_euc_dist = tar_read(euc_dist)
+# in_net_dist = tar_read(net_dist)
 
-#----- Compute nMDS trajectories for each site over time ----------------------
-#nMDS across all sites and dates
-#then plot
+compute_mantel <- function(
+  in_spenv_dt,
+  in_spatial_beta,
+  in_euc_dist,
+  in_env_dist,
+  in_net_dist,
+  rep = 999) {
+  #We used traditional Mantel tests for spatial distances 
+  #(topographic and network distance) and Mantel tests corrected by spatial 
+  #autocorrelation through Moran spectral randomization (MSR; Crabot et al. 2019) 
+  #for environmental distances (water chemistry and flow regime difference)
+  #(999 runs for each test) to identify the relative effect of environmental 
+  #and spatial filters on community composition in each year. The MSR correction 
+  #was able to remove the spurious spatial dependence from our environmental 
+  #distances, providing a correlation value that reflected the net environmental 
+  #importance. Each Mantel test included the Bray–Curtis dissimilarity based on
+  #macroinvertebrate abundances as response variable and one environmental 
+  #(water chemistry, hydrological) or spatial (topographic, network) distance 
+  #as predictor. [from Arguelles et al. 2020]
+  
+  
+  
+  #------------------ Prepare data ---------------------------------------------
+  
+  xy <- as.matrix(in_euc_dist$xy)
+  
+  presabs_dt_spcols_fecha <- in_spatial_beta$presabs_dt[
+    , -c('caso', 'presencia')]
+  
+  spcols_abund <- in_spenv_dt[, names(presabs_dt_spcols_fecha),
+                              with=F]
+  
 
+  presabs_vario <- variogmultiv(presabs_dt_spcols_fecha[fecha=='fecha1', 
+                                                        -'fecha', with=F],
+                                xy,
+                                nclass=5)
+  
+  plot(
+    presabs_vario$d,
+    presabs_vario$var,
+    ty='b',
+    pch=20,
+    xlab='Distance',
+    ylab=("C(distance")
+  )
+  
+  
+  #------------------ Test Crabot et al. 2019 procedure -----------------------
+  # Optimize spatial weight matrix for pres-abs data
+  
+  adespatial::listw.explore()
+  
+  sw_candidates <- adespatial::listw.candidates(xy, style='W') 
+  
+  sw_selected <- adespatial::listw.select(
+    x = presabs_dt_spcols_fecha[fecha=='fecha1', 
+                                -'fecha', with=F],
+    candidates = sw_candidates,
+    MEM.autocor = 'all',
+    method = 'FWD',
+    p.adjust = TRUE,
+    verbose = T)
+  
+  
+  # Optimize spatial weight matrix for abundance data
+  sw_selected <- spcols_abund[fecha=='fecha1', 
+                              -'fecha', with=F] %>%
+    .[, sapply(.SD, function(x) x^1/5)] %>%
+    adespatial::listw.select(
+      candidates = sw_candidates,
+      MEM.autocor = 'all',
+      method = 'FWD',
+      p.adjust = TRUE,
+      verbose = T)
+  
+  
+  
 
-#----- Compute temporal beta diversity for each site --------------------------
+  
+  
+  
+  max(in_euc_dist$distmat)
+  
+  
 
-#----- Compute Gamma diversity for each year ----------------------------------
-#Total number of species
-#Total number of genera
-#Total number of family
+  
+  nb1 <- graph2nb(gabrielneigh(xy), sym = T)
+  lw1 <- nb2listw(nb1)
+  w <- dist(xy)
+  
+  
+  msr_dist <- function(bc, xy, rep=999) {
+    
+    # Creating spatial structure
+    xy <- as.matrix(xy)
+    nb1 <- graph2nb(gabrielneigh(xy), sym = T)
+    lw1 <- nb2listw(nb1)
+    w <- dist(xy)
+    
+    m.env <- mantel.randtest(bc, che.d)
+    m.hyd <- mantel.randtest(bc, hyd.d)
+    m.top <- mantel.randtest(bc, top.d)
+    m.net <- mantel.randtest(bc, net.d)
+    
+    msr.env <- msr(m.env, lw1, rep)  
+    msr.hyd <- msr(m.hyd, lw1, rep)  
+    
+    # value of the statistic corrected for spatial autocorrelation
+    c(as.numeric(msr.env$obs - msr.env$expvar["Expectation"]),
+      as.numeric(msr.hyd$obs - msr.hyd$expvar["Expectation"]),
+      m.top$obs,
+      m.net$obs)->res
+    
+    # p-value corrected for spatial autocorrelation
+    c(msr.env$pvalue, msr.hyd$pvalue, m.top$pvalue, m.net$pvalue)->pval
+    
+    return(list(res=res, pval=pval))
+  }
+  
+}
 
+#----- Compute temporal beta diversity for each site 
