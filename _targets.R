@@ -115,7 +115,7 @@ list(
                     IDcol = sites_IDcol)
   )
   ,
-
+  
   #Compute environmental distance matrix
   tar_target(
     env_dist,
@@ -132,55 +132,24 @@ list(
     )
   )
   ,
-
+  
   tar_target(
     spatial_beta_plots,
     plot_spatial_beta(
       in_spatial_beta = spatial_beta
     )
   )
-  # ,
-  # 
-  # tar_target(
-  #   mantel_test_list,
-  #   compute_mantel(in_spatial_beta = spatial_beta,
-  #                  in_env_dist = env_dist,
-  #                  in_euc_dist = euc_dist,
-  #                  in_net_dist = net_dist)
-  # )
+  ,
+
+  tar_target(
+    mantel_test_list,
+    compute_mantel(in_spenv_dt = spenv_dt,
+                   in_spatial_beta = spatial_beta,
+                   in_env_dist = env_dist,
+                   in_euc_dist = euc_dist,
+                   in_net_dist = net_dist)
+  )
 )
 
 
-
-
-
-
-
-
-#LAter on: Compute topographic distance (terrain is accidented)
-
-
-
-
-
-
-
-#traditional Mantel tests for spatial distances (topographic and network distance)
-#Bray–Curtis dissimilarity based on macroinvertebrate abundances as response variable
-
-#Mantel tests corrected by spatial autocorrelation through Moran spectral randomization 
-#(MSR; Crabot, Clappe, Dray, & Datry, 2019) for environmental distances (999 runs for each test) 
-#to identify the relative effect of environmental and spatial filters on community composition in each year.
-#Bray–Curtis dissimilarity based on macroinvertebrate abundances as response variable
-
-#Before summing Mantel r-values, we tested the collinearity between distances (Canedo-Arguelles et al. 2020).
-#Each pair of distances was only weakly correlated (Pearson r: −0.20 to 0.25),
-
-#More advanced methods
-
-#Make a map of the sites, river network, watershed - with site color showing flow permanence
-
-#Make a plot of Mantel's R over time
-
-
-#https://public.igb-berlin.de/index.php/s/agciopgzXjWswF4/download?path=%2Fr.stream.order%2Forder_vect_tiles20d&files=order_vect_segment_h10v10.gpkg
+#Later on: Compute topographic distance (terrain is accidented)

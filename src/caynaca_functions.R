@@ -698,19 +698,23 @@ compute_envdist <- function(in_env_dt, IDcol) {
                                     'veloc_med_sqrt', 'caudal_log10')
   )
   
+  env_corr_plot <- ggcorrplot::ggcorrplot(
+    round(
+      cor(in_env_dt[, envcols_edit, with=F],
+          use='pairwise.complete.obs'), 
+      2)
+  )
+  
+  
   #z-standardise data
   env_dt_norm <- in_env_dt[, sapply(.SD, function(x) {
     scale(x, center=T, scale=T)
   }),
   .SDcols = envcols_edit] %>%
-    as.data.table
+    as.data.table %>%
+    cbind(fecha=in_env_dt$fecha)
   
   #Check correlation plot
-  env_corr_plot <- ggcorrplot::ggcorrplot(
-    round(
-      cor(env_dt_norm, use='pairwise.complete.obs'), 
-      2)
-  )
   
   #Compute Gower's distance
   #With each category of variable weighted by 1
@@ -723,53 +727,71 @@ compute_envdist <- function(in_env_dt, IDcol) {
   #   'pH', 'conductivity_esp', 'oxigen_sat', 'TDS'
   # Sediments (4):
   #   'bloque', 'piedra', 'grava', 'arena'
-  env_dist_weighted <- cluster::daisy(env_dt_norm, 
-                                      metric = 'gower',
-                                      weights = c(
-                                        1/8, #AH_max_sqrt
-                                        1/3, #pH
-                                        1/6, #conductivity_esp
-                                        1/3, #oxigen_sat
-                                        1/6, #TDS
-                                        1/8, #AH_med_sqrt
-                                        1/4, #prof_med_sqrt
-                                        1/4, #veloc_med_sqrt
-                                        1/3, #altura
-                                        1/3, #pendiente
-                                        1/3, #orden
-                                        1/4, #caudal_log10
-                                        1/4, #bloque
-                                        1/4, #piedra
-                                        1/4, #grava
-                                        1/4 #arena
-                                      )
+  
+  full_weights <- c(
+    1/8, #AH_max_sqrt
+    1/3, #pH
+    1/6, #conductivity_esp
+    1/3, #oxigen_sat
+    1/6, #TDS
+    1/8, #AH_med_sqrt
+    1/4, #prof_med_sqrt
+    1/4, #veloc_med_sqrt
+    1/3, #altura
+    1/3, #pendiente
+    1/3, #orden
+    1/4, #caudal_log10
+    1/4, #bloque
+    1/4, #piedra
+    1/4, #grava
+    1/4 #arena
   )
   
-  env_dist_unweighted <- cluster::daisy(env_dt_norm, 
-                                        metric = 'gower',
-                                        weights = c(
-                                          1/2, #AH_max_sqrt
-                                          1, #pH
-                                          1/2, #conductivity_esp
-                                          1, #oxigen_sat
-                                          1/2, #TDS
-                                          1/2, #AH_med_sqrt
-                                          1, #prof_med_sqrt
-                                          1, #veloc_med_sqrt
-                                          1, #altura
-                                          1, #pendiente
-                                          1, #orden
-                                          1, #caudal_log10
-                                          1, #bloque
-                                          1, #piedra
-                                          1, #grava
-                                          1 #arena
-                                        )
+  env_dist_weighted <- cluster::daisy(env_dt_norm[, envcols_edit, with=F], 
+                                      metric = 'gower',
+                                      weights = full_weights
   )
+  
+  
+  partial_weights <- c(
+    1/2, #AH_max_sqrt
+    1, #pH
+    1/2, #conductivity_esp
+    1, #oxigen_sat
+    1/2, #TDS
+    1/2, #AH_med_sqrt
+    1, #prof_med_sqrt
+    1, #veloc_med_sqrt
+    1, #altura
+    1, #pendiente
+    1, #orden
+    1, #caudal_log10
+    1, #bloque
+    1, #piedra
+    1, #grava
+    1 #arena
+  )
+  
+  env_dist_unweighted <- cluster::daisy(env_dt_norm[, envcols_edit, with=F], 
+                                        metric = 'gower',
+                                        weights = partial_weights
+  )
+  
+  env_dist_weighted_byfecha <- lapply(unique(env_dt_norm$fecha), function(in_fecha) {
+    subdt <- env_dt_norm[fecha == in_fecha, -'fecha', with=F]
+    env_dist_weighted <- cluster::daisy(subdt, 
+                                        metric = 'gower',
+                                        weights = full_weights
+    )
+    return(env_dist_weighted)
+  })
+  names(env_dist_weighted_byfecha) <- unique(env_dt_norm$fecha)
+  
   
   return(list(
     gow_dist_weighted = env_dist_weighted,
-    gow_dist_unweighted = env_dist_unweighted
+    gow_dist_unweighted = env_dist_unweighted,
+    gow_dist_weighted_byfecha = env_dist_weighted_byfecha
   ))
 }
 
@@ -802,7 +824,7 @@ compute_spatial_beta <- function(in_sp_dt) {
     #jaccard_mat[upper.tri(jaccard_mat)] <- NA
     colnames(jaccard_mat) <- subdt$caso
     rownames(jaccard_mat) <- subdt$caso
-  
+    
     return(jaccard_mat)
   })
   names(jaccard_mats) <- unique(presabs_dt$fecha)
@@ -1140,6 +1162,7 @@ plot_spatial_beta <- function(in_spatial_beta) {
 # in_env_dist = tar_read(env_dist)
 # in_euc_dist = tar_read(euc_dist)
 # in_net_dist = tar_read(net_dist)
+# rep = 999
 
 compute_mantel <- function(
   in_spenv_dt,
@@ -1161,106 +1184,294 @@ compute_mantel <- function(
   #(water chemistry, hydrological) or spatial (topographic, network) distance 
   #as predictor. [from Arguelles et al. 2020]
   
-  
-  
   #------------------ Prepare data ---------------------------------------------
-  
+  #Get latitute/northing and longitude/easting
   xy <- as.matrix(in_euc_dist$xy)
   
+  #Extract pres-abs data
   presabs_dt_spcols_fecha <- in_spatial_beta$presabs_dt[
     , -c('caso', 'presencia')]
   
+  spcols <-  names(presabs_dt_spcols_fecha[, -'fecha', with=F])
+  
+  #Extract abundance data
   spcols_abund <- in_spenv_dt[, names(presabs_dt_spcols_fecha),
                               with=F]
+  spcols_abund_trans <- spcols_abund %>%
+    .[, (spcols) := sapply(.SD, simplify=F,
+                           function(x) x^(1/5)),
+      .SDcols = spcols]
   
-
-  presabs_vario <- variogmultiv(presabs_dt_spcols_fecha[fecha=='fecha1', 
-                                                        -'fecha', with=F],
-                                xy,
-                                nclass=5)
+  #Check multivariate empirical variogram for Jaccard distance
+  vario_presabs <- adespatial::variogmultiv(presabs_dt_spcols_fecha[fecha=='fecha1', 
+                                                                    -'fecha', with=F],
+                                            xy,
+                                            nclass=5)
   
   plot(
-    presabs_vario$d,
-    presabs_vario$var,
+    vario_presabs$d,
+    vario_presabs$var,
     ty='b',
     pch=20,
     xlab='Distance',
     ylab=("C(distance")
   )
   
-  
-  #------------------ Test Crabot et al. 2019 procedure -----------------------
-  # Optimize spatial weight matrix for pres-abs data
-  
-  adespatial::listw.explore()
-  
-  sw_candidates <- adespatial::listw.candidates(xy, style='W') 
-  
-  sw_selected <- adespatial::listw.select(
-    x = presabs_dt_spcols_fecha[fecha=='fecha1', 
-                                -'fecha', with=F],
-    candidates = sw_candidates,
-    MEM.autocor = 'all',
-    method = 'FWD',
-    p.adjust = TRUE,
-    verbose = T)
-  
-  
-  # Optimize spatial weight matrix for abundance data
-  sw_selected <- spcols_abund[fecha=='fecha1', 
+  #Check multivariate empirical variogram for Bray-Curtis distance
+  vario_abund <- spcols_abund[fecha=='fecha1', 
                               -'fecha', with=F] %>%
     .[, sapply(.SD, function(x) x^1/5)] %>%
-    adespatial::listw.select(
-      candidates = sw_candidates,
-      MEM.autocor = 'all',
-      method = 'FWD',
-      p.adjust = TRUE,
-      verbose = T)
+    variogmultiv(xy,
+                 nclass=5)
   
+  plot(
+    vario_abund$d,
+    vario_abund$var,
+    ty='b',
+    pch=20,
+    xlab='Distance',
+    ylab=("C(distance")
+  )
   
-  
-
-  
-  
-  
-  max(in_euc_dist$distmat)
-  
-  
-
-  
-  nb1 <- graph2nb(gabrielneigh(xy), sym = T)
-  lw1 <- nb2listw(nb1)
-  w <- dist(xy)
-  
-  
-  msr_dist <- function(bc, xy, rep=999) {
+  #------------------ Test Crabot et al. 2019 procedure -----------------------
+  run_msr_mantel <- function(in_xy,
+                             in_resp = NULL,
+                             in_pred_dist,
+                             in_resp_dist,
+                             sqrt_pred_dist,
+                             simple_test,
+                             rep = 999,
+                             nullify_NAs = TRUE,
+                             verbose = F
+  ) {
     
-    # Creating spatial structure
-    xy <- as.matrix(xy)
-    nb1 <- graph2nb(gabrielneigh(xy), sym = T)
-    lw1 <- nb2listw(nb1)
-    w <- dist(xy)
+    if (nullify_NAs) {in_resp_dist[is.na(in_resp_dist)] <- 0} #Double 0s
     
-    m.env <- mantel.randtest(bc, che.d)
-    m.hyd <- mantel.randtest(bc, hyd.d)
-    m.top <- mantel.randtest(bc, top.d)
-    m.net <- mantel.randtest(bc, net.d)
+    if (sqrt_pred_dist) {in_pred_dist <- sqrt(in_pred_dist)}
     
-    msr.env <- msr(m.env, lw1, rep)  
-    msr.hyd <- msr(m.hyd, lw1, rep)  
+    if (simple_test) {
+      mantel_out<- ade4::mantel.randtest(
+        as.dist(in_pred_dist), 
+        as.dist(in_resp_dist)
+      )
+      
+      r <-  mantel_out$obs - mantel_out$expvar["Expectation"]
+      names(r) <- ""
+      signif <- mantel_out$pvalue
+      test <- 'ade4::mantel.randtest - simple'
+      
+    } else { #Run partial mantel test
+      #If the pred distance matrix is non-euclidean
+      if (!(ade4::is.euclid(as.dist(in_pred_dist)))) {
+        #adespatial::listw.explore() #Too explore different SWM models
+        #Perform a standard partial mantel test
+        mantel_out <- vegan::mantel.partial(xdis = as.dist(in_pred_dist), 
+                                            ydis = as.dist(in_resp_dist),
+                                            zdis = dist(in_xy),
+                                            permutations = rep)
+        r <- mantel_out$statistic
+        signif <- mantel_out$signif
+        test <- 'vegan::mantel.partial - standard partial'
+        
+      #If the pred distance matrix is euclidean
+      } else {
+        
+        # Optimize spatial weight matrix before Moran Spectral Randomization
+        sw_candidates <- adespatial::listw.candidates(in_xy, style='C') 
+        
+        sw_selected <- adespatial::listw.select(
+          x = in_resp,
+          candidates = sw_candidates,
+          MEM.autocor = 'positive',
+          method = 'FWD',
+          p.adjust = TRUE,
+          verbose = verbose
+        )
+        
+        #If there was no significant positive spatial structure
+        if (is.null(sw_selected$best.id)) {
+          
+          #Perform a standard partial mantel test
+          mantel_out <- vegan::mantel.partial(xdis = as.dist(in_pred_dist), 
+                                              ydis = as.dist(in_resp_dist),
+                                              zdis = dist(in_xy),
+                                              permutations = rep)
+          r <- mantel_out$statistic
+          signif <- mantel_out$signif
+          test <- 'vegan::mantel.partial - standard partial'
+          
+        } else {
+          #If a significant positive spatial structure was detected, perform 
+          #Mantel test based on spatially constrained randomizations using
+          #Moran spectral randomization with the best spatial weighting matrix
+          R2_best <- round(sw_selected$candidates$R2Adj.select[sw_selected$best.id], 3)
+          #Compute SW based on best model
+          lw1 <- sw_candidates[[names(sw_selected$best.id)]]
+          
+          #Run standar Mantel
+          standard_mantel <- ade4::mantel.randtest(m1=as.dist(in_pred_dist), 
+                                                   m2=as.dist(in_resp_dist)
+          )
+          
+          #Then 
+          mantel_out <- adespatial::msr(standard_mantel, 
+                                        lw1, 
+                                        nrepet=rep)
+          
+          r <-  mantel_out$obs - mantel_out$expvar["Expectation"]
+          names(r) <- ""
+          signif <- mantel_out$pvalue
+          test <- 'adespatial::msr - msr partial'
+        }
+      }
+    }
     
-    # value of the statistic corrected for spatial autocorrelation
-    c(as.numeric(msr.env$obs - msr.env$expvar["Expectation"]),
-      as.numeric(msr.hyd$obs - msr.hyd$expvar["Expectation"]),
-      m.top$obs,
-      m.net$obs)->res
-    
-    # p-value corrected for spatial autocorrelation
-    c(msr.env$pvalue, msr.hyd$pvalue, m.top$pvalue, m.net$pvalue)->pval
-    
-    return(list(res=res, pval=pval))
+    return(list(
+      mantel_out = mantel_out,
+      r = r,
+      signif = signif,
+      test = test)
+    )
   }
   
+  #----------------- Compute partial mantel test -------------------------------
+  #Jaccard distance (presence-absence data) - Environmental distance
+  print("Jaccard distance (presence-absence data) - Environmental distance")
+  jaccard_mantel_envdist_list <- lapply(
+    unique(presabs_dt_spcols_fecha$fecha),
+    function(in_fecha) { 
+      print(in_fecha)
+      return(
+        run_msr_mantel(
+          in_xy = xy,
+          in_resp = presabs_dt_spcols_fecha[fecha==in_fecha, -'fecha', with=F],
+          in_pred_dist = as.matrix(in_env_dist$gow_dist_weighted_byfecha[[in_fecha]]),
+          in_resp_dist =  in_spatial_beta$jaccard_mats[[in_fecha]],
+          simple_test = FALSE,
+          sqrt_pred_dist = TRUE,
+          nullify_NAs = TRUE,
+          rep = 999
+        )
+      )}
+  )
+  
+  #Jaccard distance (presence-absence data) - Network distance
+  print("Jaccard distance (presence-absence data) - Network distance")
+  jaccard_mantel_netdist_list <- lapply(
+    unique(presabs_dt_spcols_fecha$fecha),
+    function(in_fecha) { 
+      print(in_fecha)
+      return(
+        run_msr_mantel(
+          in_xy = xy,
+          in_resp = presabs_dt_spcols_fecha[fecha==in_fecha, -'fecha', with=F],
+          in_pred_dist = as.matrix(in_net_dist),
+          in_resp_dist =  in_spatial_beta$jaccard_mats[[in_fecha]],
+          simple_test = FALSE,
+          sqrt_pred_dist = FALSE,
+          nullify_NAs = TRUE,
+          rep = 999
+        )
+      )}
+  )
+  
+  #Bray-Curtis distance (abundance data) - Environmental distance
+  print("Bray-Curtis distance (abundance data) - Environmental distance")
+  bray_mantel_envdist_list <- lapply(
+    unique(spcols_abund_trans$fecha),
+    function(in_fecha) { 
+      print(in_fecha)
+      return(
+        run_msr_mantel(
+          in_xy = xy,
+          in_resp = spcols_abund_trans[fecha=='fecha1', -'fecha', with=F],
+          in_pred_dist = as.matrix(in_env_dist$gow_dist_weighted_byfecha[[in_fecha]]),
+          in_resp_dist =  in_spatial_beta$bray_mats[[in_fecha]],
+          simple_test = FALSE,
+          sqrt_pred_dist = TRUE,
+          nullify_NAs = TRUE,
+          rep = 999
+        )
+      )}
+  )
+  
+  #Bray-Curtis distance (abundance data) - Network distance
+  print("Bray-Curtis distance (abundance data) - Network distance")
+  bray_mantel_netdist_list <- lapply(
+    unique(spcols_abund_trans$fecha),
+    function(in_fecha) { 
+      print(in_fecha)
+      return(
+        run_msr_mantel(
+          in_xy = xy,
+          in_resp = spcols_abund_trans[fecha=='fecha1', -'fecha', with=F],
+          in_pred_dist = as.matrix(in_net_dist),
+          in_resp_dist =  in_spatial_beta$bray_mats[[in_fecha]],
+          simple_test = FALSE,
+          sqrt_pred_dist = FALSE,
+          nullify_NAs = TRUE,
+          rep = 999
+        )
+      )}
+  )
+  
+  #------------------ Run simple Mantel test against euclidean distance --------
+  #Jaccard distance (presence-absence data) - Euclidean distance
+  print("Jaccard distance (presence-absence data) - Euclidean distance")
+  jaccard_mantel_eucdist_list <- lapply(
+    unique(presabs_dt_spcols_fecha$fecha),
+    function(in_fecha) { 
+      print(in_fecha)
+
+      out_list <- run_msr_mantel(
+        in_xy = xy,
+        in_pred_dist = as.matrix(in_euc_dist$distmat),
+        in_resp_dist =  in_spatial_beta$jaccard_mats[[in_fecha]],
+        simple_test = TRUE,
+        sqrt_pred_dist = FALSE,
+        nullify_NAs = TRUE,
+        rep = 999
+      )
+      return(out_list)
+      }
+  )
+  
+  #Bray-Curtis distance (abundance data) - Euclidean distance
+  print("Bray-Curtis distance (abundance data) - Euclidean distance")
+  bray_mantel_eucdist_list <- lapply(
+    unique(presabs_dt_spcols_fecha$fecha),
+    function(in_fecha) { 
+      print(in_fecha)
+      
+      out_list <- run_msr_mantel(
+        in_xy = xy,
+        in_pred_dist = as.matrix(in_euc_dist$distmat),
+        in_resp_dist =  in_spatial_beta$bray_mats[[in_fecha]],
+        simple_test = TRUE,
+        sqrt_pred_dist = FALSE,
+        nullify_NAs = TRUE,
+        rep = 999
+      )
+      return(out_list)
+    }
+  )
+  
+  mantel_netdist_eucdist <- mantel_out<- ade4::mantel.randtest(
+    as.dist(in_euc_dist$distmat), 
+    as.dist(in_net_dist)
+  )
+  
+  return(list(
+    jaccard_mantel_envdist_list = jaccard_mantel_envdist_list,
+    jaccard_mantel_netdist_list = jaccard_mantel_netdist_list,
+    jaccard_mantel_eucdist_list = jaccard_mantel_eucdist_list,
+    bray_mantel_envdist_list = bray_mantel_envdist_list,
+    bray_mantel_netdist_list = bray_mantel_netdist_list,
+    bray_mantel_eucdist_list = bray_mantel_eucdist_list,
+    mantel_netdist_eucdist = mantel_netdist_eucdist
+  ))
 }
 
-#----- Compute temporal beta diversity for each site 
+#----- Plot Mantel tests results ----------------------------------------------
+
+#----- Map sites --------------------------------------------------------------
