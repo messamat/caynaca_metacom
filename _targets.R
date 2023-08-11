@@ -161,10 +161,15 @@ list(
   ),
   
   tar_target(
-    hillshade,
-    create_hillshade(in_basemaps = basemaps,
-                     z_exponent = 1.3,
-                     out_path = file.path(resdir, 'basemap_data'))
+    hillshade_bolivia,
+    create_hillshade(in_dem = unserialize(basemaps$elev_bolivia),
+                     z_exponent = 1.3)
+  ),
+  
+  tar_target(
+    hillshade_net,
+    create_hillshade(in_dem = unserialize(basemaps$elev_net),
+                     z_exponent = 1.3)
   )
   # ,
   # 

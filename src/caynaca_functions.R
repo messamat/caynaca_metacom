@@ -149,30 +149,111 @@ BCD <-
     res
   }
 
+#---- direct network ----------------------------------------------------------
+in_net <- tar_read(net_formatted)
+idcol <- 'OBJECTID_1'
+outlet_id <- 245
 
-#---- Direct network ----------------------------------------------------------
 direct_network <- function(in_net,
                            idcol,
                            outlet_id
                           ) {
-  #Split lines at intersections
-  network <- as_sfnetwork(linestrings) %>%
+  #------------------ Split lines at intersections -----------------------------
+  sfnet <- as_sfnetwork(in_net) %>%
     activate(edges) %>%
     arrange(edge_length()) %>%
     convert(to_spatial_subdivision)
   
-  #Identify dangle points
+  network <- activate(sfnet, "edges") %>%
+    st_as_sf()
+  network$newID <- seq_len(nrow(network))
   
-  #Remove outlet
+  nodes <- activate(sfnet, "nodes") %>%
+    st_as_sf()
   
-  #For lines with dangle points, make sure that the dangle point 
-  #is the start point
+  #------------ TEST --------------
+  nodes_edges_inters <- sf::st_intersection(nodes,
+                                            network) %>%
+    as.data.table 
   
-  #For other lines, identify those with with a start or end point overlapping with
-  #the end point of those already processed, make sure this is the start point
+  dangle_points <- nodes_edges_inters[
+    !(duplicated(nodes_edges_inters$.tidygraph_node_index) |
+        duplicated(nodes_edges_inters$.tidygraph_node_index, fromLast = T)),
+  ]
+
+    
+    
   
-  #Repeat until reaching outlet
+  %>%
+    .[newID.1!= newID, paste0(newID, pos)]
   
+  dangle_points <- as.data.table(start_end_points)[
+    !(paste0(newID, pos) %in% start_end_points_intersID),] %>%
+    .[OBJECTID_1 != outlet_id,]
+  #######################
+  
+  
+  #plot(as_sfnetwork(network))
+  network_dt <- as.data.table(network)
+  
+  #------------------ Identify dangle points -----------------------------------
+  #Get start and end points
+  start_end_points <- st_line_sample(network, 
+                                  sample=c(0,1)) %>%
+    st_cast("POINT") %>% #Convert from MULTIPOINT (including both start and end points) to POINT
+    cbind(
+      network_dt[rep(seq_len(nrow(network_dt)), each=2),][, -'geometry', with=F], #join attributes
+      data.frame(pos = rep(c('start', 'end'), length(.)/2)) #add start and end attribute
+    ) %>%
+    setnames('.', 'geometry') %>%
+    st_as_sf 
+
+  start_end_points_intersID <- sf::st_intersection(start_end_points,
+                                                   network) %>%
+    as.data.table %>%
+    .[newID.1!= newID, paste0(newID, pos)]
+  
+  dangle_points <- as.data.table(start_end_points)[
+    !(paste0(newID, pos) %in% start_end_points_intersID),] %>%
+    .[OBJECTID_1 != outlet_id,]
+  
+  ggplot() +
+    geom_sf(data = network, linewidth=1.2, color='blue') +
+    geom_sf(data=  st_as_sf(dangle_points)) +
+    geom_sf(data= st_as_sf(dangle_points[duplicated(newID) |
+                                           duplicated(newID, fromLast=T),]), color='red')
+  
+  
+  
+
+  
+#   #Establish those to reconnect
+#   IDcoldupli <- paste0(IDcol, '.1')
+#   segments_to_correct <- net_sub[
+#     !(net_sub[[IDcol]] %in% 
+#         unique(
+#           net_int[net_int[[IDcol]] !=net_int[[IDcoldupli]],][[IDcol]])
+#     ),] 
+#   
+#   dangle_points <- st_line_sample(segments_to_correct, 
+#                                                     sample=c(0,1))  %>%
+#     # st_cast("POINT") %>% #Convert from MULTIPOINT (including both start and end points) to POINT
+#     # cbind(
+#     #   segments_to_correct[rep(seq_len(nrow(segments_to_correct)), each=2),], #join attributes
+#     #   data.frame(pos = rep(c('start', 'end'), length(.)/2)) #add start and end attribute
+#     # ) %>%
+#     # .[,-(which(names(.) == 'geometry.1'))] #Remove LINESTRING attribute
+#   
+#   #Remove outlet
+#   
+#   #For lines with dangle points, make sure that the dangle point 
+#   #is the start point
+#   
+#   #For other lines, identify those with with a start or end point overlapping with
+#   #the end point of those already processed, make sure this is the start point
+#   
+#   #Repeat until reaching outlet
+#   
 }
 
 
@@ -1556,77 +1637,93 @@ plot_mantel_tests <- function(in_mantel_test_list) {
 
 #--- Download basemap data -------
 #out_path <- file.path(resdir, 'basemap_data')
-
-download_basemap <- function(out_path) {
+#in_net <- tar_read(net_formatted)
+  
+download_basemap <- function(out_path
+                             # , in_net
+                             ) {
   if (!dir.exists(out_path)) {
     dir.create(out_path)
   }
-  
   
   #------- Download administrative boundaries----------------------------------
   admin <- geodata::world(resolution=3, path=out_path)
   
   bolivia_boundaries <- admin[admin$NAME_0 == 'Bolivia']
   
-  #------- Download DEM --------------------------------------------------------
-  # bol_bbox <- ext(bolivia_boundaries)
-  # elev <- geodata::elevation_3s(lon = bol_bbox[1:2],
-  #                               lat = bol_bbox[3:4],
-  #                               path=file.path(out_path, 'strm'))
+  #------- Download low-res DEM for all of Bolivia -----------------------------
+  elev_bolivia <- geodata::elevation_30s(country='Bolivia',
+                                        path=file.path(out_path, 'strm'))
 
-  tile_id_list <- c('23_14', '23_15', '23_16', '23_17',
-             '24_14', '24_15', '24_16', '24_17',
-             '25_16', '25_15', '25_16', '25_17')
   
-  elev_tiles <- lapply(tile_id_list, function(tile) {
-    print(tile)
-    dem_path = file.path(out_path, paste0('srtm_', tile, '.zip'))
-    if (!file.exists(dem_path)) {
-      download.file(
-        paste0('https://srtm.csi.cgiar.org/wp-content/uploads/files/srtm_5x5/TIFF/srtm_',
-               tile, '.zip'), 
-        dem_path)
-    }
-    
-    elev <- unzip(dem_path, exdir = out_path) %>%
-      grep('.tif', ., value = T) %>%
-      terra::rast(.)
-    
-    return(elev)
-  })
+  #------- Download high-res DEM for watershed ---------------------------------
+  #net_bbox <- ext(terra::project(x=vect(in_net), crs(elv_bolivia)))
+  # elev_tiles <- geodata::elevation_3s(lon=net_bbox[1:2], lat=net_bbox[3:4],
+  #                                     path = file.path(out_path, 'strm'))
   
-  #------- Mosaick and crop DEM  -----------------------------------------------
-  dem_out_path <- file.path(out_path, 'dem_bolivia')
+  tile <- '23_16'
+  dem_path = file.path(out_path, paste0('srtm_', tile, '.zip'))
+  if (!file.exists(dem_path)) {
+    download.file(
+      paste0('https://srtm.csi.cgiar.org/wp-content/uploads/files/srtm_5x5/TIFF/srtm_',
+             tile, '.zip'), 
+      dem_path)
+  }
   
-  elev_crop <- sprc(elev_tiles) %>%
-    merge %>%  
-    crop(ext(bolivia_boundaries) + 0.1) %>%
-    mask(bolivia_boundaries)
+  elev_net <- unzip(dem_path, exdir = out_path) %>%
+        grep('.tif', ., value = T) %>%
+        terra::rast(.)
   
-  names(elev_crop) <- 'elevation'
-  
-  out_elev_rast <- file.path(out_path, 'elev_crop.tif')
-  writeRaster(elev_crop, out_elev_rast, overwrite = T)
-
-  #lc <- geodata::landcover('trees')
+  # # tile_id_list <- c('23_14', '23_15', '23_16', '23_17',
+  # #          '24_14', '24_15', '24_16', '24_17',
+  # #          '25_16', '25_15', '25_16', '25_17')
+  # 
+  # elev_tiles <- lapply(tile_id_list, function(tile) {
+  #   print(tile)
+  #   dem_path = file.path(out_path, paste0('srtm_', tile, '.zip'))
+  #   if (!file.exists(dem_path)) {
+  #     download.file(
+  #       paste0('https://srtm.csi.cgiar.org/wp-content/uploads/files/srtm_5x5/TIFF/srtm_',
+  #              tile, '.zip'), 
+  #       dem_path)
+  #   }
+  #   
+  #   elev <- unzip(dem_path, exdir = out_path) %>%
+  #     grep('.tif', ., value = T) %>%
+  #     terra::rast(.)
+  #   
+  #   return(elev)
+  # })
+  # 
+  # #------- Mosaick and crop DEM  -----------------------------------------------
+  # #dem_out_path <- file.path(out_path, 'dem_bolivia')
+  # 
+  # elev_crop <- sprc(elev_tiles) %>%
+  #   merge %>%  
+  #   crop(ext(bolivia_boundaries) + 0.1) %>%
+  #   mask(bolivia_boundaries)
+  # 
+  # names(elev_crop) <- 'elevation'
+  # 
+  # out_elev_rast <- file.path(out_path, 'elev_crop.tif')
+  # writeRaster(elev_crop, out_elev_rast, overwrite = T)
+  # 
+  # #lc <- geodata::landcover('trees')
   
   #------- Function outputs ----------------------------------------------------
   return(list(
     admin = terra::serialize(admin, NULL),
-    elev_path = out_elev_rast
+    elev_bolivia = terra::serialize(elev_bolivia, NULL),
+    elev_net = terra::serialize(elev_net, NULL)
   ))
 }
 
 
 #--- Create hillshade ---------------------------------------------------------
-# in_basemaps = tar_read(basemaps)
-# z_exponent = 1.3
-# out_path = file.path(resdir, 'basemap_data')
-
-create_hillshade <- function(in_basemaps, z_exponent, out_path) {
+create_hillshade <- function(in_dem, z_exponent, write=F, out_path) {
   #From Dr. Dominic Royé - https://dominicroye.github.io/en/2022/hillshade-effects/
-  elev <- in_basemaps$elev %>%
-    unserialize %>%
+  #terra::rast(in_basemaps$elev_path) %>%
+  elev <- in_dem %>%
     terra::project("epsg:32720") %>%
     .^(z_exponent)
 
@@ -1634,7 +1731,7 @@ create_hillshade <- function(in_basemaps, z_exponent, out_path) {
   sl <- terra::terrain(elev, "slope", unit = "radians")
   
   # estimate the aspect or orientation
-  asp <- terrain(elev, "aspect", unit = "radians")
+  asp <- terra::terrain(elev, "aspect", unit = "radians")
   
   # pass multiple directions to shade()
   hillmulti <- purrr::map(c(270, 15, 60, 330), function(dir){ 
@@ -1646,12 +1743,15 @@ create_hillshade <- function(in_basemaps, z_exponent, out_path) {
     rast %>%
     sum
 
-  out_rast <- file.path(out_path, 'hillshade_3s.tif')
-  writeRaster(hillmulti, out_rast, overwrite = T)
-  
-  return(
-    out_rast
+  if (write) {
+    terra::writeRaster(hillmulti, out_path, overwrite = T)
+    return(
+      out_rast
     )
+  } else {
+    return(serialize(hillmulti, NULL))
+  }
+
 }
 
 
@@ -1660,23 +1760,111 @@ create_hillshade <- function(in_basemaps, z_exponent, out_path) {
 # in_net = tar_read(net_formatted)
 # in_sites_path = tar_read(sites_path)
 # in_basemaps <- tar_read(basemaps)
-# in_hillshade <- tar_read(hillshade)
+# in_hillshade_bolivia <- tar_read(hillshade_bolivia)
+# in_hillshade_net <- tar_read(hillshade_net)
 
 map_caynaca <- function(in_spenv_dt, 
                         in_net,
                         in_sites_path,
                         in_basemaps,
-                        in_hillshade) {
+                        in_hillshade_bolivia,
+                        in_hillshade_net) {
+  
+  #------------ Make watershed map ---------------------------------------------
+  netbbox <- ext(vect(in_net))
+  
+  elev_net <- unserialize(in_basemaps$elev_net) %>%
+    terra::project("epsg:32720") %>%
+    crop(netbbox + 1000) 
+  
+  #Load and crop hillshade
+  hilldf_net <- unserialize(in_hillshade_net) %>%
+    crop(netbbox + 1000) 
+  
+  #Format Hillshade map - https://dieghernan.github.io/202210_tidyterra-hillshade/
+  # normalize names
+  names(hilldf_net) <- "shades"
+  # Make palette
+  pal_greys <- hcl.colors(1000, "Grays")
+  # Use a vector of colors
+  index <- hilldf_net %>%
+    mutate(index_col = rescale(shades, to = c(1, length(pal_greys)))) %>%
+    mutate(index_col = round(index_col)) %>%
+    pull(index_col)
+  # Get cols
+  vector_cols <- pal_greys[index]
+  
+  
+  hill_plot <- ggplot() +
+    geom_spatraster(
+      data = hilldf_net, fill = vector_cols, maxcell = Inf,
+      alpha = 0.6
+    )
+  
+  #Format full map
+  r_limits <- minmax(elev_net$srtm_23_16) %>% as.vector() 
+  r_limits <-  c(floor(r_limits[1] / 500), 
+                 ceiling(r_limits[2] / 500)) * 500 %>%
+    pmax(0)
+  
+  #Test palette
+  # elevt_test <- ggplot() +
+  #   geom_spatraster(data = elev_net, aes(fill=srtm_23_16))
+  # plot_pal_test <- function(pal) {
+  #   elevt_test +
+  #     scale_fill_hypso_tint_c(
+  #       limits = r_limits,
+  #       palette = pal
+  #     ) +
+  #     ggtitle(pal) +
+  #     theme_minimal()
+  # }
+  # 
+  # plot_pal_test("etopo1_hypso")
+  # plot_pal_test("dem_poster")
+  # plot_pal_test("spain")
+  # plot_pal_test("pakistan")
+  # plot_pal_test("utah_1")
+  # plot_pal_test("wiki-2.0_hypso")
+  
+  base_plot <- hill_plot +
+    # Avoid resampling with maxcell
+    geom_spatraster(data =  elev_net, maxcell = Inf) +
+    scale_fill_hypso_tint_c(
+      limits = r_limits,
+      palette = "etopo1_hypso",
+      alpha = 0.3,
+      labels = label_comma(),
+      # For the legend I use custom breaks
+      breaks = c(
+        seq(0, 500, 100),
+        seq(750, 1500, 250),
+        2000
+      )
+    )
+  
+  net_plot <- base_plot +
+    geom_sf(data = in_net, linewidth=1.2, color='blue') +
+    geom_spatvector(data = vect(in_sites_path), 
+                    color='black') +
+    theme_minimal(base_family = "notoserif") +
+    theme(legend.position = "bottom",
+     
+          panel.grid = element_blank())
+
+  
+  #------------ Make inset map -------------------------------------------------
+  
   
   admin <- unserialize(in_basemaps$admin)%>%
     terra::project("epsg:32720")
-  elev <- unserialize(in_basemaps$elev) %>%
+  elev <- rast(in_basemaps$elev_path) %>%
     terra::project("epsg:32720")
 
   netbbox <- st_bbox(in_net)
   
   #Convert the hillshade to XYZ
-  hilldf <- unserialize(in_hillshade) %>%
+  hilldf <- rast(in_hillshade) %>%
     as.data.frame(xy = TRUE)
   
   ggplot() +
