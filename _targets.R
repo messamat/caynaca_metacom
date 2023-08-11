@@ -148,7 +148,34 @@ list(
                    in_env_dist = env_dist,
                    in_euc_dist = euc_dist,
                    in_net_dist = net_dist)
+  ),
+  
+  tar_target(
+    mantel_plots,
+    plot_mantel_tests(in_mantel_test_list = mantel_test_list)
+  ),
+  
+  tar_target(
+    basemaps,
+    download_basemap(out_path = file.path(resdir, 'basemap_data'))
+  ),
+  
+  tar_target(
+    hillshade,
+    create_hillshade(in_basemaps = basemaps,
+                     z_exponent = 1.3,
+                     out_path = file.path(resdir, 'basemap_data'))
   )
+  # ,
+  # 
+  # tar_target(
+  #   map_data,
+  #   map_caynaca(in_spenv_dt = spenv_dt,
+  #               in_net = net_formatted,
+  #               in_sites_path = sites_path,
+  #               in_basemaps = basemaps
+  #   )
+  # )
 )
 
 

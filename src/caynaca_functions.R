@@ -149,6 +149,33 @@ BCD <-
     res
   }
 
+
+#---- Direct network ----------------------------------------------------------
+direct_network <- function(in_net,
+                           idcol,
+                           outlet_id
+                          ) {
+  #Split lines at intersections
+  network <- as_sfnetwork(linestrings) %>%
+    activate(edges) %>%
+    arrange(edge_length()) %>%
+    convert(to_spatial_subdivision)
+  
+  #Identify dangle points
+  
+  #Remove outlet
+  
+  #For lines with dangle points, make sure that the dangle point 
+  #is the start point
+  
+  #For other lines, identify those with with a start or end point overlapping with
+  #the end point of those already processed, make sure this is the start point
+  
+  #Repeat until reaching outlet
+  
+}
+
+
 #------------------ WORKFLOW FUNCTIONS -------------------------------------------
 # in_sp_dt <- tar_read(rawdata_sp)
 # in_env_dt <- tar_read(rawdata_env)
@@ -1472,6 +1499,205 @@ compute_mantel <- function(
   ))
 }
 
-#----- Plot Mantel tests results ----------------------------------------------
+#--- Plot Mantel tests results ----------------------------------------------
+#in_mantel_test_list <- tar_read(mantel_test_list)
 
-#----- Map sites --------------------------------------------------------------
+plot_mantel_tests <- function(in_mantel_test_list) {
+  
+  #Format all mantel test results in a single dt
+  mantel_dt <- 
+    lapply(list('jaccard', 'bray'), function(dissimilarity) {
+      lapply(
+        list('envdist', 'netdist', 'eucdist'), function(mat) {
+          lapply(
+            in_mantel_test_list[[paste0(
+              dissimilarity, '_mantel_', mat, '_list')]], 
+            function(x) x[2:4]) %>%
+            rbindlist %>%
+            .[, `:=`(variable = mat,
+                     dissim = dissimilarity,
+                     fecha = paste0('fecha', seq(1,6)))]
+        }) %>%
+        rbindlist
+    }) %>%
+    rbindlist
+  
+  mantel_plot <- ggplot(mantel_dt, aes(x=fecha, y=r)) +
+    geom_path(aes(color=variable, linetype = dissim,
+                  group = interaction(dissim, variable))) +
+    geom_point(aes(color=variable, shape = dissim), size=3) +
+    geom_point(data = mantel_dt[signif > 0.05,], 
+               aes(shape = dissim), color='grey', size=3) +
+    scale_color_discrete(name = '', 
+                         labels=c('Environment', 'Euclidean distance',
+                                  'Network distance')) +
+    scale_shape_discrete(name='Dissimilarity measure',
+                         labels=c('Bray-Curtis (abundance)', 
+                                  'Jaccard (presence-absence)')) +
+    scale_linetype_discrete(name='Dissimilarity measure',
+                            labels=c('Bray-Curtis (abundance)', 
+                                     'Jaccard (presence-absence)')) +
+    theme_classic() +
+    theme(axis.title.x = element_blank())
+  
+  return(list(
+    mantel_plot = mantel_plot,
+    mantel_dt = mantel_dt
+  ))
+  
+  
+  
+  
+
+  
+  
+  
+}
+
+#--- Download basemap data -------
+#out_path <- file.path(resdir, 'basemap_data')
+
+download_basemap <- function(out_path) {
+  if (!dir.exists(out_path)) {
+    dir.create(out_path)
+  }
+  
+  
+  #------- Download administrative boundaries----------------------------------
+  admin <- geodata::world(resolution=3, path=out_path)
+  
+  bolivia_boundaries <- admin[admin$NAME_0 == 'Bolivia']
+  
+  #------- Download DEM --------------------------------------------------------
+  # bol_bbox <- ext(bolivia_boundaries)
+  # elev <- geodata::elevation_3s(lon = bol_bbox[1:2],
+  #                               lat = bol_bbox[3:4],
+  #                               path=file.path(out_path, 'strm'))
+
+  tile_id_list <- c('23_14', '23_15', '23_16', '23_17',
+             '24_14', '24_15', '24_16', '24_17',
+             '25_16', '25_15', '25_16', '25_17')
+  
+  elev_tiles <- lapply(tile_id_list, function(tile) {
+    print(tile)
+    dem_path = file.path(out_path, paste0('srtm_', tile, '.zip'))
+    if (!file.exists(dem_path)) {
+      download.file(
+        paste0('https://srtm.csi.cgiar.org/wp-content/uploads/files/srtm_5x5/TIFF/srtm_',
+               tile, '.zip'), 
+        dem_path)
+    }
+    
+    elev <- unzip(dem_path, exdir = out_path) %>%
+      grep('.tif', ., value = T) %>%
+      terra::rast(.)
+    
+    return(elev)
+  })
+  
+  #------- Mosaick and crop DEM  -----------------------------------------------
+  dem_out_path <- file.path(out_path, 'dem_bolivia')
+  
+  elev_crop <- sprc(elev_tiles) %>%
+    merge %>%  
+    crop(ext(bolivia_boundaries) + 0.1) %>%
+    mask(bolivia_boundaries)
+  
+  names(elev_crop) <- 'elevation'
+  
+  out_elev_rast <- file.path(out_path, 'elev_crop.tif')
+  writeRaster(elev_crop, out_elev_rast, overwrite = T)
+
+  #lc <- geodata::landcover('trees')
+  
+  #------- Function outputs ----------------------------------------------------
+  return(list(
+    admin = terra::serialize(admin, NULL),
+    elev_path = out_elev_rast
+  ))
+}
+
+
+#--- Create hillshade ---------------------------------------------------------
+# in_basemaps = tar_read(basemaps)
+# z_exponent = 1.3
+# out_path = file.path(resdir, 'basemap_data')
+
+create_hillshade <- function(in_basemaps, z_exponent, out_path) {
+  #From Dr. Dominic Royé - https://dominicroye.github.io/en/2022/hillshade-effects/
+  elev <- in_basemaps$elev %>%
+    unserialize %>%
+    terra::project("epsg:32720") %>%
+    .^(z_exponent)
+
+  # estimate the slope
+  sl <- terra::terrain(elev, "slope", unit = "radians")
+  
+  # estimate the aspect or orientation
+  asp <- terrain(elev, "aspect", unit = "radians")
+  
+  # pass multiple directions to shade()
+  hillmulti <- purrr::map(c(270, 15, 60, 330), function(dir){ 
+    shade(sl, asp, 
+          angle = 45, 
+          direction = dir,
+          normalize= TRUE)}
+  ) %>%
+    rast %>%
+    sum
+
+  out_rast <- file.path(out_path, 'hillshade_3s.tif')
+  writeRaster(hillmulti, out_rast, overwrite = T)
+  
+  return(
+    out_rast
+    )
+}
+
+
+#--- Map sites --------------------------------------------------------------
+# in_spenv_dt = tar_read(spenv_dt)
+# in_net = tar_read(net_formatted)
+# in_sites_path = tar_read(sites_path)
+# in_basemaps <- tar_read(basemaps)
+# in_hillshade <- tar_read(hillshade)
+
+map_caynaca <- function(in_spenv_dt, 
+                        in_net,
+                        in_sites_path,
+                        in_basemaps,
+                        in_hillshade) {
+  
+  admin <- unserialize(in_basemaps$admin)%>%
+    terra::project("epsg:32720")
+  elev <- unserialize(in_basemaps$elev) %>%
+    terra::project("epsg:32720")
+
+  netbbox <- st_bbox(in_net)
+  
+  #Convert the hillshade to XYZ
+  hilldf <- unserialize(in_hillshade) %>%
+    as.data.frame(xy = TRUE)
+  
+  ggplot() +
+    geom_raster(data = hilldf,
+                aes(x, y, fill = sum),
+                show.legend = FALSE) +
+    scale_fill_distiller(palette = "Greys") +
+    geom_spatraster(data = elev,
+                    aes(fill=BOL_elv_msk),
+                    alpha=0.2) +
+    geom_sf(data = in_net) +
+    # scale_fill_hypso_tint_c(breaks = c(180, 250, 500, 1000,
+    #                                    1500,  2000, 2500,
+    #                                    3000, 3500, 4000)) +
+    # guides(fill = guide_colorsteps(barwidth = 20,
+    #                                barheight = .5,
+    #                                title.position = "right")) +
+    labs(fill = "m") +
+    xlim(c(netbbox[1]-5000, netbbox[3]+5000)) +
+    ylim(c(netbbox[2]-5000, netbbox[4]+5000)) +
+    theme_void() +
+    theme(legend.position = "bottom")
+  
+}
