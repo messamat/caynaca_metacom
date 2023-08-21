@@ -157,39 +157,114 @@ outlet_id <- 245
 direct_network <- function(in_net,
                            idcol,
                            outlet_id
-                          ) {
+) {
   #------------------ Split lines at intersections -----------------------------
+  st_precision(in_net) <- 0.05 #Reduce precision to make up for imperfect geometry alignments
+  
+  in_net <- in_net[in_net$length > 0.1 &
+                     in_net[[idcol]] != 73,]
+  
+  outlet_p <-  st_cast(in_net[in_net[[idcol]] == outlet_id,], "POINT") %>%
+    .[nrow(.),]
+  
   sfnet <- as_sfnetwork(in_net) %>%
     activate(edges) %>%
     arrange(edge_length()) %>%
-    convert(to_spatial_subdivision)
+    tidygraph::convert(to_spatial_simple) %>%
+    tidygraph::convert(to_spatial_smooth) %>%
+    tidygraph::convert(to_spatial_subdivision)
   
-  network <- activate(sfnet, "edges") %>%
+  net<- activate(sfnet, "edges") %>%
     st_as_sf()
-  network$newID <- seq_len(nrow(network))
+  net$newID <- seq_len(nrow(net))
   
-  nodes <- activate(sfnet, "nodes") %>%
-    st_as_sf()
+  outlet_newID <- sf::st_intersection(net,
+                                      outlet_p)[['newID']]
   
-  #------------ TEST --------------
-  nodes_edges_inters <- sf::st_intersection(nodes,
-                                            network) %>%
-    as.data.table 
+  #------------------ Identify dangle points -----------------------------------
+  search_dangles <- function(in_network, idcol) {
+    if (nrow(in_network) > 1) {
+      sfnet <- as_sfnetwork(in_network) %>%
+        activate("edges") %>%
+        arrange(edge_length()) %>%
+        tidygraph::convert(to_spatial_subdivision) 
+      
+      edges <- activate(sfnet, "edges") %>%
+        st_as_sf()
+      nodes <- activate(sfnet, "nodes") %>%
+        st_as_sf()                                
+      
+      nodes_edges_inters <- sf::st_intersection(edges,
+                                                nodes) %>%
+        as.data.table
+      
+      dangle_points <- nodes_edges_inters[
+        !(duplicated(nodes_edges_inters$.tidygraph_node_index) |
+            duplicated(nodes_edges_inters$.tidygraph_node_index, fromLast = T)),
+      ]
+      
+      netp <- ggplot() +
+        geom_sf(data = edges, linewidth=1.2, color='blue') +
+        geom_sf(data=  st_as_sf(dangle_points))
+      
+      print(netp)
+      
+      return(dangle_points[[idcol]])
+    } else {
+      return(NULL)
+    }
+  }
   
-  dangle_points <- nodes_edges_inters[
-    !(duplicated(nodes_edges_inters$.tidygraph_node_index) |
-        duplicated(nodes_edges_inters$.tidygraph_node_index, fromLast = T)),
-  ]
-
+  dangles <- 'go!'
+  order <- 1
+  net_list <- list()
+  
+  while (length(dangles) > 0) {
+    dangles <- search_dangles(in_network=net, idcol='newID')
     
+    dangle_segs_boolean <- (net[['newID']] %in% dangles &
+                              net[['newID']] != outlet_newID)
+    net[dangle_segs_boolean, 'stream_order'] <- order
+    net_list[[order]] <-  net[dangle_segs_boolean,] 
+    net <- net[!(dangle_segs_boolean),]
+    order <- order + 1
     
+    net  <- as_sfnetwork(net) %>%
+      activate(edges) %>%
+      arrange(edge_length()) %>%
+      tidygraph::convert(to_spatial_smooth) %>%
+      tidygraph::convert(to_spatial_simple) %>%
+      st_as_sf()
+    net$newID <- seq_len(nrow(net))
+    
+    outlet_newID <- sf::st_intersection(net,
+                                        outlet_p)[['newID']]
+    print(outlet_newID)
+    
+    st_precision(net) <- 0.05
+    
+    write_sf(net[, c(idcol, 'newID')],
+             file.path(resdir, paste0('check', order, '.shp')),
+             overwrite = T
+    )
+  }
   
-  %>%
-    .[newID.1!= newID, paste0(newID, pos)]
   
-  dangle_points <- as.data.table(start_end_points)[
-    !(paste0(newID, pos) %in% start_end_points_intersID),] %>%
-    .[OBJECTID_1 != outlet_id,]
+  
+  #Run a first time to identify dangle points (these are firts order stremas)
+  #Remove segments associated with a dangle point aside from outlet
+  #Re-run dangle-point search - these are second order streams
+  #Etc.
+  
+  
+  
+  
+  # %>%
+  #   .[newID.1!= newID, paste0(newID, pos)]
+  
+  # dangle_points <- as.data.table(start_end_points)[
+  #   !(paste0(newID, pos) %in% start_end_points_intersID),] %>%
+  #   .[OBJECTID_1 != outlet_id,]
   #######################
   
   
@@ -199,7 +274,7 @@ direct_network <- function(in_net,
   #------------------ Identify dangle points -----------------------------------
   #Get start and end points
   start_end_points <- st_line_sample(network, 
-                                  sample=c(0,1)) %>%
+                                     sample=c(0,1)) %>%
     st_cast("POINT") %>% #Convert from MULTIPOINT (including both start and end points) to POINT
     cbind(
       network_dt[rep(seq_len(nrow(network_dt)), each=2),][, -'geometry', with=F], #join attributes
@@ -207,7 +282,7 @@ direct_network <- function(in_net,
     ) %>%
     setnames('.', 'geometry') %>%
     st_as_sf 
-
+  
   start_end_points_intersID <- sf::st_intersection(start_end_points,
                                                    network) %>%
     as.data.table %>%
@@ -217,43 +292,42 @@ direct_network <- function(in_net,
     !(paste0(newID, pos) %in% start_end_points_intersID),] %>%
     .[OBJECTID_1 != outlet_id,]
   
-  ggplot() +
-    geom_sf(data = network, linewidth=1.2, color='blue') +
-    geom_sf(data=  st_as_sf(dangle_points)) +
+  
+  +
     geom_sf(data= st_as_sf(dangle_points[duplicated(newID) |
                                            duplicated(newID, fromLast=T),]), color='red')
   
   
   
-
   
-#   #Establish those to reconnect
-#   IDcoldupli <- paste0(IDcol, '.1')
-#   segments_to_correct <- net_sub[
-#     !(net_sub[[IDcol]] %in% 
-#         unique(
-#           net_int[net_int[[IDcol]] !=net_int[[IDcoldupli]],][[IDcol]])
-#     ),] 
-#   
-#   dangle_points <- st_line_sample(segments_to_correct, 
-#                                                     sample=c(0,1))  %>%
-#     # st_cast("POINT") %>% #Convert from MULTIPOINT (including both start and end points) to POINT
-#     # cbind(
-#     #   segments_to_correct[rep(seq_len(nrow(segments_to_correct)), each=2),], #join attributes
-#     #   data.frame(pos = rep(c('start', 'end'), length(.)/2)) #add start and end attribute
-#     # ) %>%
-#     # .[,-(which(names(.) == 'geometry.1'))] #Remove LINESTRING attribute
-#   
-#   #Remove outlet
-#   
-#   #For lines with dangle points, make sure that the dangle point 
-#   #is the start point
-#   
-#   #For other lines, identify those with with a start or end point overlapping with
-#   #the end point of those already processed, make sure this is the start point
-#   
-#   #Repeat until reaching outlet
-#   
+  
+  #   #Establish those to reconnect
+  #   IDcoldupli <- paste0(IDcol, '.1')
+  #   segments_to_correct <- net_sub[
+  #     !(net_sub[[IDcol]] %in% 
+  #         unique(
+  #           net_int[net_int[[IDcol]] !=net_int[[IDcoldupli]],][[IDcol]])
+  #     ),] 
+  #   
+  #   dangle_points <- st_line_sample(segments_to_correct, 
+  #                                                     sample=c(0,1))  %>%
+  #     # st_cast("POINT") %>% #Convert from MULTIPOINT (including both start and end points) to POINT
+  #     # cbind(
+  #     #   segments_to_correct[rep(seq_len(nrow(segments_to_correct)), each=2),], #join attributes
+  #     #   data.frame(pos = rep(c('start', 'end'), length(.)/2)) #add start and end attribute
+  #     # ) %>%
+  #     # .[,-(which(names(.) == 'geometry.1'))] #Remove LINESTRING attribute
+  #   
+  #   #Remove outlet
+  #   
+  #   #For lines with dangle points, make sure that the dangle point 
+  #   #is the start point
+  #   
+  #   #For other lines, identify those with with a start or end point overlapping with
+  #   #the end point of those already processed, make sure this is the start point
+  #   
+  #   #Repeat until reaching outlet
+  #   
 }
 
 
@@ -737,11 +811,11 @@ compute_netdist <- function(in_sites_snapped,
   in_net <- sf::st_cast(in_net, "LINESTRING")
   st_geometry(in_net) = st_geometry(in_net) %>%
     lapply(function(x) round(x, 5)) %>%
-    st_sfc(crs = st_crs(in_net))
+    sf::st_sfc(crs = st_crs(in_net))
   
   st_geometry(sites) = st_geometry(sites) %>%
     lapply(function(x) round(x, 5)) %>%
-    st_sfc(crs = st_crs(sites))
+    sf::st_sfc(crs = st_crs(sites))
   
   #Format sfnetwork to compute distance matrix
   sfnet <-in_net %>%
@@ -750,7 +824,7 @@ compute_netdist <- function(in_sites_snapped,
     tidygraph::convert(to_spatial_smooth)  %>% #Remove loops
     tidygraph::convert(to_spatial_subdivision) %>% #in sfnetwork, edges that aren’t connected at terminal nodes are considered disconnected. so deal with that
     activate("edges") %>%
-    mutate(length = edge_length())#Re-compute edge length
+    dplyr::mutate(length = edge_length())#Re-compute edge length
   
   #Compute distance matrix (keeping only segments downstream of sites)
   dist_mat <- sfnetworks::st_network_blend(sfnet, sites) %>% #Append sites to sfnetwork
@@ -1273,12 +1347,12 @@ plot_spatial_beta <- function(in_spatial_beta) {
 # rep = 999
 
 compute_mantel <- function(
-  in_spenv_dt,
-  in_spatial_beta,
-  in_euc_dist,
-  in_env_dist,
-  in_net_dist,
-  rep = 999) {
+    in_spenv_dt,
+    in_spatial_beta,
+    in_euc_dist,
+    in_env_dist,
+    in_net_dist,
+    rep = 999) {
   #We used traditional Mantel tests for spatial distances 
   #(topographic and network distance) and Mantel tests corrected by spatial 
   #autocorrelation through Moran spectral randomization (MSR; Crabot et al. 2019) 
@@ -1381,7 +1455,7 @@ compute_mantel <- function(
         signif <- mantel_out$signif
         test <- 'vegan::mantel.partial - standard partial'
         
-      #If the pred distance matrix is euclidean
+        #If the pred distance matrix is euclidean
       } else {
         
         # Optimize spatial weight matrix before Moran Spectral Randomization
@@ -1530,7 +1604,7 @@ compute_mantel <- function(
     unique(presabs_dt_spcols_fecha$fecha),
     function(in_fecha) { 
       print(in_fecha)
-
+      
       out_list <- run_msr_mantel(
         in_xy = xy,
         in_pred_dist = as.matrix(in_euc_dist$distmat),
@@ -1541,7 +1615,7 @@ compute_mantel <- function(
         rep = 999
       )
       return(out_list)
-      }
+    }
   )
   
   #Bray-Curtis distance (abundance data) - Euclidean distance
@@ -1629,7 +1703,7 @@ plot_mantel_tests <- function(in_mantel_test_list) {
   
   
   
-
+  
   
   
   
@@ -1638,10 +1712,10 @@ plot_mantel_tests <- function(in_mantel_test_list) {
 #--- Download basemap data -------
 #out_path <- file.path(resdir, 'basemap_data')
 #in_net <- tar_read(net_formatted)
-  
+
 download_basemap <- function(out_path
                              # , in_net
-                             ) {
+) {
   if (!dir.exists(out_path)) {
     dir.create(out_path)
   }
@@ -1653,8 +1727,8 @@ download_basemap <- function(out_path
   
   #------- Download low-res DEM for all of Bolivia -----------------------------
   elev_bolivia <- geodata::elevation_30s(country='Bolivia',
-                                        path=file.path(out_path, 'strm'))
-
+                                         path=file.path(out_path, 'strm'))
+  
   
   #------- Download high-res DEM for watershed ---------------------------------
   #net_bbox <- ext(terra::project(x=vect(in_net), crs(elv_bolivia)))
@@ -1671,8 +1745,8 @@ download_basemap <- function(out_path
   }
   
   elev_net <- unzip(dem_path, exdir = out_path) %>%
-        grep('.tif', ., value = T) %>%
-        terra::rast(.)
+    grep('.tif', ., value = T) %>%
+    terra::rast(.)
   
   # # tile_id_list <- c('23_14', '23_15', '23_16', '23_17',
   # #          '24_14', '24_15', '24_16', '24_17',
@@ -1726,7 +1800,7 @@ create_hillshade <- function(in_dem, z_exponent, write=F, out_path) {
   elev <- in_dem %>%
     terra::project("epsg:32720") %>%
     .^(z_exponent)
-
+  
   # estimate the slope
   sl <- terra::terrain(elev, "slope", unit = "radians")
   
@@ -1742,7 +1816,7 @@ create_hillshade <- function(in_dem, z_exponent, write=F, out_path) {
   ) %>%
     rast %>%
     sum
-
+  
   if (write) {
     terra::writeRaster(hillmulti, out_path, overwrite = T)
     return(
@@ -1751,7 +1825,7 @@ create_hillshade <- function(in_dem, z_exponent, write=F, out_path) {
   } else {
     return(serialize(hillmulti, NULL))
   }
-
+  
 }
 
 
@@ -1849,9 +1923,9 @@ map_caynaca <- function(in_spenv_dt,
                     color='black') +
     theme_minimal(base_family = "notoserif") +
     theme(legend.position = "bottom",
-     
+          
           panel.grid = element_blank())
-
+  
   
   #------------ Make inset map -------------------------------------------------
   
@@ -1860,7 +1934,7 @@ map_caynaca <- function(in_spenv_dt,
     terra::project("epsg:32720")
   elev <- rast(in_basemaps$elev_path) %>%
     terra::project("epsg:32720")
-
+  
   netbbox <- st_bbox(in_net)
   
   #Convert the hillshade to XYZ
