@@ -20,8 +20,8 @@ library(stringr)
 library(targets)
 library(terra)
 library(tidygraph)
+library(tidyterra)
 library(vegan)
 library(zoo)
 
-# library(tidyterra)
 

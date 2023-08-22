@@ -161,6 +161,15 @@ list(
   ),
   
   tar_target(
+    net_directed,
+    direct_network(in_net = net_formatted,
+                   idcol = 'OBJECTID_1',
+                   outlet_id = 245
+                   )
+  )
+  ,
+  
+  tar_target(
     hillshade_bolivia,
     create_hillshade(in_dem = unserialize(basemaps$elev_bolivia),
                      z_exponent = 1.3)

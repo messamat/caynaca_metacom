@@ -150,9 +150,9 @@ BCD <-
   }
 
 #---- direct network ----------------------------------------------------------
-in_net <- tar_read(net_formatted)
-idcol <- 'OBJECTID_1'
-outlet_id <- 245
+# in_net <- tar_read(net_formatted)
+# idcol <- 'OBJECTID_1'
+# outlet_id <- 245
 
 direct_network <- function(in_net,
                            idcol,
@@ -161,29 +161,33 @@ direct_network <- function(in_net,
   #------------------ Split lines at intersections -----------------------------
   st_precision(in_net) <- 0.05 #Reduce precision to make up for imperfect geometry alignments
   
+  #Remove artefacts in network
   in_net <- in_net[in_net$length > 0.1 &
-                     in_net[[idcol]] != 73,]
+                     in_net[[idcol]] != 73,] 
   
+  #Get outlet
   outlet_p <-  st_cast(in_net[in_net[[idcol]] == outlet_id,], "POINT") %>%
     .[nrow(.),]
   
   sfnet <- as_sfnetwork(in_net) %>%
     activate(edges) %>%
     arrange(edge_length()) %>%
-    tidygraph::convert(to_spatial_simple) %>%
-    tidygraph::convert(to_spatial_smooth) %>%
-    tidygraph::convert(to_spatial_subdivision)
+    tidygraph::convert(to_spatial_simple) %>% #Remove loops
+    tidygraph::convert(to_spatial_smooth) %>% #Remove pseudo nodes (doesn't work well)
+    tidygraph::convert(to_spatial_subdivision) #Split at intersections
   
-  net<- activate(sfnet, "edges") %>%
-    st_as_sf()
-  net$newID <- seq_len(nrow(net))
+  net<- activate(sfnet, "edges") %>% #Grab edges
+    st_as_sf() 
+  net$newID <- seq_len(nrow(net)) #Create new IDs because of merging and resplitting
   
+  #Get newID for outlet
   outlet_newID <- sf::st_intersection(net,
                                       outlet_p)[['newID']]
   
   #------------------ Identify dangle points -----------------------------------
   search_dangles <- function(in_network, idcol) {
     if (nrow(in_network) > 1) {
+      #Get sfnetwork
       sfnet <- as_sfnetwork(in_network) %>%
         activate("edges") %>%
         arrange(edge_length()) %>%
@@ -194,140 +198,78 @@ direct_network <- function(in_net,
       nodes <- activate(sfnet, "nodes") %>%
         st_as_sf()                                
       
+      #Intersect nodes and edges
       nodes_edges_inters <- sf::st_intersection(edges,
                                                 nodes) %>%
         as.data.table
       
+      #Identify nodes that intersect with only one edge (dangle points)
       dangle_points <- nodes_edges_inters[
         !(duplicated(nodes_edges_inters$.tidygraph_node_index) |
             duplicated(nodes_edges_inters$.tidygraph_node_index, fromLast = T)),
       ]
       
+      #Plot network with dangle points
       netp <- ggplot() +
         geom_sf(data = edges, linewidth=1.2, color='blue') +
         geom_sf(data=  st_as_sf(dangle_points))
       
       print(netp)
       
+      #Return newID for dangle points
       return(dangle_points[[idcol]])
     } else {
       return(NULL)
     }
   }
   
+  #Set up loop that will iteratively identify dangle points, remove the associated
+  #lowest-order edges from network, then re-identify dangle points, removing the 
+  #associated lowest-order edges from network, and so on, iteratively, until
+  #only the outlet edge remains
+  
   dangles <- 'go!'
   order <- 1
-  net_list <- list()
+  net_list <- list() #List into which each subsequent set of edges will be written
   
   while (length(dangles) > 0) {
-    dangles <- search_dangles(in_network=net, idcol='newID')
+    dangles <- search_dangles(in_network=net, idcol='newID') #identify dangle points
     
     dangle_segs_boolean <- (net[['newID']] %in% dangles &
                               net[['newID']] != outlet_newID)
-    net[dangle_segs_boolean, 'stream_order'] <- order
-    net_list[[order]] <-  net[dangle_segs_boolean,] 
-    net <- net[!(dangle_segs_boolean),]
-    order <- order + 1
     
-    net  <- as_sfnetwork(net) %>%
+    net[dangle_segs_boolean, 'stream_order'] <- order #assign the associated edges a stream order
+    net_list[[order]] <-  net[dangle_segs_boolean,] #Write these edges to the list
+    net <- net[!(dangle_segs_boolean),] #Remove these edges from the network
+    order <- order + 1 
+    
+    net  <- as_sfnetwork(net) %>% 
       activate(edges) %>%
       arrange(edge_length()) %>%
-      tidygraph::convert(to_spatial_smooth) %>%
+      tidygraph::convert(to_spatial_smooth) %>% #Re-dissolve edges
       tidygraph::convert(to_spatial_simple) %>%
       st_as_sf()
-    net$newID <- seq_len(nrow(net))
+    net$newID <- seq_len(nrow(net)) #Re-assign new IDs
     
-    outlet_newID <- sf::st_intersection(net,
+    outlet_newID <- sf::st_intersection(net, #Re-dentify ID for outlet
                                         outlet_p)[['newID']]
     print(outlet_newID)
     
-    st_precision(net) <- 0.05
+    st_precision(net) <- 0.05 #Make sure the correct precision is set up so that even edges that don't perfectly match can be linked
     
-    write_sf(net[, c(idcol, 'newID')],
+    write_sf(net[, c(idcol, 'newID')], #Write out intermediate network layer
              file.path(resdir, paste0('check', order, '.shp')),
              overwrite = T
     )
   }
+  #Add the outlet edge
+  net_list[[order]] <- net
+  net_list[[order]]$stream_order <- order
   
+  #Create a single sf
+  out_net <- do.call(rbind, lapply(net_list, st_sf))
   
-  
-  #Run a first time to identify dangle points (these are firts order stremas)
-  #Remove segments associated with a dangle point aside from outlet
-  #Re-run dangle-point search - these are second order streams
-  #Etc.
-  
-  
-  
-  
-  # %>%
-  #   .[newID.1!= newID, paste0(newID, pos)]
-  
-  # dangle_points <- as.data.table(start_end_points)[
-  #   !(paste0(newID, pos) %in% start_end_points_intersID),] %>%
-  #   .[OBJECTID_1 != outlet_id,]
-  #######################
-  
-  
-  #plot(as_sfnetwork(network))
-  network_dt <- as.data.table(network)
-  
-  #------------------ Identify dangle points -----------------------------------
-  #Get start and end points
-  start_end_points <- st_line_sample(network, 
-                                     sample=c(0,1)) %>%
-    st_cast("POINT") %>% #Convert from MULTIPOINT (including both start and end points) to POINT
-    cbind(
-      network_dt[rep(seq_len(nrow(network_dt)), each=2),][, -'geometry', with=F], #join attributes
-      data.frame(pos = rep(c('start', 'end'), length(.)/2)) #add start and end attribute
-    ) %>%
-    setnames('.', 'geometry') %>%
-    st_as_sf 
-  
-  start_end_points_intersID <- sf::st_intersection(start_end_points,
-                                                   network) %>%
-    as.data.table %>%
-    .[newID.1!= newID, paste0(newID, pos)]
-  
-  dangle_points <- as.data.table(start_end_points)[
-    !(paste0(newID, pos) %in% start_end_points_intersID),] %>%
-    .[OBJECTID_1 != outlet_id,]
-  
-  
-  +
-    geom_sf(data= st_as_sf(dangle_points[duplicated(newID) |
-                                           duplicated(newID, fromLast=T),]), color='red')
-  
-  
-  
-  
-  
-  #   #Establish those to reconnect
-  #   IDcoldupli <- paste0(IDcol, '.1')
-  #   segments_to_correct <- net_sub[
-  #     !(net_sub[[IDcol]] %in% 
-  #         unique(
-  #           net_int[net_int[[IDcol]] !=net_int[[IDcoldupli]],][[IDcol]])
-  #     ),] 
-  #   
-  #   dangle_points <- st_line_sample(segments_to_correct, 
-  #                                                     sample=c(0,1))  %>%
-  #     # st_cast("POINT") %>% #Convert from MULTIPOINT (including both start and end points) to POINT
-  #     # cbind(
-  #     #   segments_to_correct[rep(seq_len(nrow(segments_to_correct)), each=2),], #join attributes
-  #     #   data.frame(pos = rep(c('start', 'end'), length(.)/2)) #add start and end attribute
-  #     # ) %>%
-  #     # .[,-(which(names(.) == 'geometry.1'))] #Remove LINESTRING attribute
-  #   
-  #   #Remove outlet
-  #   
-  #   #For lines with dangle points, make sure that the dangle point 
-  #   #is the start point
-  #   
-  #   #For other lines, identify those with with a start or end point overlapping with
-  #   #the end point of those already processed, make sure this is the start point
-  #   
-  #   #Repeat until reaching outlet
-  #   
+  return(out_net)
 }
 
 
@@ -1830,12 +1772,12 @@ create_hillshade <- function(in_dem, z_exponent, write=F, out_path) {
 
 
 #--- Map sites --------------------------------------------------------------
-# in_spenv_dt = tar_read(spenv_dt)
-# in_net = tar_read(net_formatted)
-# in_sites_path = tar_read(sites_path)
-# in_basemaps <- tar_read(basemaps)
-# in_hillshade_bolivia <- tar_read(hillshade_bolivia)
-# in_hillshade_net <- tar_read(hillshade_net)
+in_spenv_dt = tar_read(spenv_dt)
+in_net = tar_read(net_directed)
+in_sites_path = tar_read(sites_path)
+in_basemaps <- tar_read(basemaps)
+in_hillshade_bolivia <- tar_read(hillshade_bolivia)
+in_hillshade_net <- tar_read(hillshade_net)
 
 map_caynaca <- function(in_spenv_dt, 
                         in_net,
@@ -1843,7 +1785,6 @@ map_caynaca <- function(in_spenv_dt,
                         in_basemaps,
                         in_hillshade_bolivia,
                         in_hillshade_net) {
-  
   #------------ Make watershed map ---------------------------------------------
   netbbox <- ext(vect(in_net))
   
@@ -1862,18 +1803,34 @@ map_caynaca <- function(in_spenv_dt,
   pal_greys <- hcl.colors(1000, "Grays")
   # Use a vector of colors
   index <- hilldf_net %>%
-    mutate(index_col = rescale(shades, to = c(1, length(pal_greys)))) %>%
-    mutate(index_col = round(index_col)) %>%
-    pull(index_col)
+    tidyterra::mutate(index_col = rescale(shades, to = c(1, length(pal_greys)))) %>%
+    tidyterra::mutate(index_col = round(index_col)) %>%
+    tidyterra::pull(index_col)
   # Get cols
   vector_cols <- pal_greys[index]
   
+  axis_ext <- vect(in_net) %>%
+    project("EPSG:4326") %>%
+    ext() %>%
+    as.vector()
+  
+  br_y <- seq(axis_ext[3], axis_ext[4], length.out = 1000) %>%
+    pretty(n = 3) %>%
+    round(3) %>%
+    unique()
+  
+  br_x <- seq(axis_ext[1], axis_ext[2], length.out = 1000) %>%
+    pretty(n = 3) %>%
+    round(3) %>%
+    unique()
   
   hill_plot <- ggplot() +
     geom_spatraster(
       data = hilldf_net, fill = vector_cols, maxcell = Inf,
       alpha = 0.6
-    )
+    ) +
+    scale_x_continuous(breaks=br_x) +
+    scale_y_continuous(breaks=br_y)
   
   #Format full map
   r_limits <- minmax(elev_net$srtm_23_16) %>% as.vector() 
@@ -1918,13 +1875,15 @@ map_caynaca <- function(in_spenv_dt,
     )
   
   net_plot <- base_plot +
-    geom_sf(data = in_net, linewidth=1.2, color='blue') +
+    geom_sf(data = in_net, aes(linewidth=stream_order), color='blue') +
+    scale_linewidth_continuous(range=c(0.5,1.7)) +
     geom_spatvector(data = vect(in_sites_path), 
-                    color='black') +
-    theme_minimal(base_family = "notoserif") +
-    theme(legend.position = "bottom",
-          
-          panel.grid = element_blank())
+                    color='black',
+                    size = 1.75) +
+    #theme_minimal(base_family = "notoserif") +
+    theme(legend.position = "none",
+          panel.grid = element_blank(),
+          panel.background = element_rect(color='white'))
   
   
   #------------ Make inset map -------------------------------------------------
