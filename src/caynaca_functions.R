@@ -304,7 +304,7 @@ format_spdata <- function(in_sp_dt) {
 
 #--- format envdata -------------
 format_envdata <- function(in_env_dt) {
-  skim(in_env_dt)
+  #skim(in_env_dt)
   
   in_env_dt[, unique(intermitencia)]
   
@@ -380,7 +380,13 @@ plot_spdata <- function(in_spenv_dt, in_sp_dt) {
   #by site, colored by site's intermittency status
   plot_abundance_vs_time <- ggplot(in_spenv_dt, aes(x=fecha, y=total, 
                                                     group=sitio)) + 
-    geom_line(aes(color=intermitencia)) + 
+    geom_line(aes(color=intermitencia), linewidth=1)  +    
+    scale_color_manual(
+      name = stringr::str_wrap('Long-term flow regime', 30),
+      values = c('#d73027', '#fdb863', '#4575b4'),
+      labels = c('Intermittent: dry',
+                 'Intermittent: disconnected pools',
+                 'Perennial')) +
     scale_y_sqrt() + 
     theme_bw()
   
@@ -388,10 +394,17 @@ plot_spdata <- function(in_spenv_dt, in_sp_dt) {
   #by site, colored by site's intermittency status
   plot_relative_abundance_vs_time <- ggplot(in_spenv_dt, 
                                             aes(x=fecha, y=total_relative)) + 
-    geom_line(aes(color=intermitencia, group=sitio)) + 
+    geom_line(aes(color=intermitencia, group=sitio), alpha=0.8) + 
     geom_smooth(aes(x=as.numeric(factor(fecha)), color=intermitencia), 
-                linewidth=2, span=0.5, se=F
-    ) +
+                linewidth=2.5, span=0.5, se=F
+    ) +    
+    scale_color_manual(
+      name = stringr::str_wrap('Long-term flow regime', 30),
+      values = c('#d73027', '#fdb863', '#4575b4'),
+      labels = c('Intermittent: dry',
+                 'Intermittent: disconnected pools',
+                 'Perennial')) +
+    scale_y_continuous(name='Relative abundance') +
     coord_cartesian(ylim=c(0,100), clip="off") + 
     theme_bw() 
   
@@ -412,14 +425,14 @@ plot_spdata <- function(in_spenv_dt, in_sp_dt) {
     scale_y_continuous(name='Diversity') +
     scale_linetype(name='', labels=c('Gamma diversity')) +
     scale_color_manual(
-      name = stringr::str_wrap('Alpha diversity by long-term flow regime', 30),
+      name = stringr::str_wrap('Long-term flow regime', 30),
       values = c('#d73027', '#fdb863', '#4575b4'),
       labels = c('Intermittent: dry',
                  'Intermittent: disconnected pools',
                  'Perennial')) +
     guides(linetype = guide_legend(order = 1), 
            colour = guide_legend(order = 2)) +
-    coord_cartesian(ylim=c(0,65), expand=c(0,0), clip="off") + 
+    coord_cartesian(ylim=c(0,65), expand=F, clip="off") + 
     theme_bw() 
   
   #Scatterplot of relative abundance against relative channel cross section area
@@ -432,6 +445,13 @@ plot_spdata <- function(in_spenv_dt, in_sp_dt) {
     geom_quantile(aes(color=intermitencia), quantile=c(0.2,0.5,0.8)
                   #,linewidth=2, span=1, method='lm', se=F
     ) +
+    labs(x='Relative cross-section area', y='Relative total abundance') +
+    scale_color_manual(
+      name = stringr::str_wrap('Long-term flow regime', 30),
+      values = c('#d73027', '#fdb863', '#4575b4'),
+      labels = c('Intermittent: dry',
+                 'Intermittent: disconnected pools',
+                 'Perennial')) +
     coord_cartesian(ylim=c(0,100)) + 
     theme_bw() 
   
@@ -440,11 +460,17 @@ plot_spdata <- function(in_spenv_dt, in_sp_dt) {
   plot_abundance_vs_area <- ggplot(in_spenv_dt, 
                                    aes(x=cross_section_area,
                                        y=total)) + 
-    
     geom_point(aes(color=intermitencia)) +
     geom_quantile(aes(color=intermitencia), quantile=c(0.2,0.5,0.8),
                   #,linewidth=2, span=1, method='lm', se=F
     ) +
+    labs(x='Cross-section area', y='Relative total abundance') +
+    scale_color_manual(
+      name = stringr::str_wrap('Long-term flow regime', 30),
+      values = c('#d73027', '#fdb863', '#4575b4'),
+      labels = c('Intermittent: dry',
+                 'Intermittent: disconnected pools',
+                 'Perennial')) +
     theme_bw() 
   
   
@@ -461,6 +487,11 @@ plot_spdata <- function(in_spenv_dt, in_sp_dt) {
 
 #--- plot_envdata -------------
 plot_envdata <- function(in_env_dt) {
+  in_env_dt[, estado_de_flujo := factor(
+    estado_de_flujo, 
+    levels=c('F', 'IP', 'D'),
+    labels = c('Flowing', 'Isolated pools', 'Dry bed'))
+  ]
   
   env_melt <- melt(in_env_dt, 
                    id.vars=c('cuenca', 'presencia', 'sitio',
@@ -470,10 +501,12 @@ plot_envdata <- function(in_env_dt) {
   env_boxplots_bysites <- ggplot(env_melt,
                                  aes(x=sitio, y=value)) +
     geom_jitter(aes(color=estado_de_flujo)) +
+    scale_color_manual(name='Flow state',
+                       values = c('#2988ad', '#fea534', '#ff6138')) +
     geom_boxplot(alpha=1/2) +
     facet_wrap(~variable, scales='free') +
     theme_bw() +
-    theme(axis.text.x = element_text(size=7, angle=30))
+    theme(axis.text.x = element_text(size=7, angle=90))
   
   env_distribs_plot <- ggplot(env_melt,
                               aes(x=value)) +
@@ -486,7 +519,7 @@ plot_envdata <- function(in_env_dt) {
     rel_freq = .SD[, .N, by=estado_de_flujo]$N/.N), 
     by=fecha] %>%
     merge(expand.grid(c(paste0('fecha', seq(1,6))),
-                      c('F', 'IP', 'D')),
+                      c('Flowing', 'Isolated pools', 'Dry bed')),
           by.x=c('fecha', 'estado_de_flujo'),
           by.y=c('Var1', 'Var2'),
           all.y=T
@@ -494,9 +527,14 @@ plot_envdata <- function(in_env_dt) {
     .[is.na(rel_freq), rel_freq := 0]
   
   estado_de_flujo_tsplot <- ggplot(data=estado_de_flujo_ts) +
-    geom_area(aes(x=fecha, y=rel_freq, fill=estado_de_flujo, group=estado_de_flujo),
+    geom_area(aes(x=fecha, y=rel_freq, 
+                  fill=estado_de_flujo, group=estado_de_flujo),
               position='stack') +
-    coord_cartesian(expand=c(0,0)) +
+    scale_y_continuous(name = 'Relative frequency of flow states across sites') +
+    scale_fill_manual(
+      name = 'Flow state',
+      values = c('#2988ad', '#fea534', '#ff6138')) +
+    coord_cartesian(expand=F) +
     theme_classic()
   
   return(list(
@@ -1135,9 +1173,9 @@ plot_spatial_beta <- function(in_spatial_beta) {
                        labels = 'Total beta diversity') +
     scale_fill_discrete(labels=c('Replacement', 'Richness difference')) +
     scale_x_discrete(name='Date') +
-    scale_y_continuous(limits=c(0,1), 
+    scale_y_continuous(limits=c(0,0.5), 
                        name='Value') +
-    coord_cartesian(expand=c(0,0)) +
+    coord_cartesian(expand=F) +
     theme_classic() + 
     theme(legend.title = element_blank())
   
@@ -1160,7 +1198,7 @@ plot_spatial_beta <- function(in_spatial_beta) {
   #   scale_x_discrete(name='Date') +
   #   scale_y_continuous(limits=c(0,100), 
   #                      name='Value') +
-  #   coord_cartesian(expand=c(0,0)) +
+  #   coord_cartesian(expand=F) +
   #   theme_classic() + 
   #   theme(legend.title = element_blank())
   
@@ -1182,9 +1220,9 @@ plot_spatial_beta <- function(in_spatial_beta) {
     scale_fill_discrete(labels=c('Replacement',
                                  'Richness difference')) +
     scale_x_discrete(name='Date') +
-    scale_y_continuous(limits=c(0,1),
+    scale_y_continuous(limits=c(0,0.5),
                        name='Value') +
-    coord_cartesian(expand=c(0,0)) +
+    coord_cartesian(expand=F) +
     theme_classic() +
     theme(legend.title = element_blank())
   
@@ -1206,9 +1244,9 @@ plot_spatial_beta <- function(in_spatial_beta) {
     scale_fill_discrete(labels=c('Replacement',
                                  'Richness difference')) +
     scale_x_discrete(name='Date') +
-    scale_y_continuous(limits=c(0,1),
+    scale_y_continuous(limits=c(0,0.5),
                        name='Value') +
-    coord_cartesian(expand=c(0,0)) +
+    coord_cartesian(expand=F) +
     theme_classic() +
     theme(legend.title = element_blank())
   
@@ -1258,13 +1296,13 @@ plot_spatial_beta <- function(in_spatial_beta) {
     scale_shape_discrete(name='Flow state at time step',
                          labels = c('Flowing',
                                     'Disconnected pools',
-                                    '')) +
+                                    'Dry channel (not displayed)')) +
     scale_color_manual(name='Long-term flow regime',
-                       values = c('#d73027', '#fee090', '#4575b4', '#ffffff'),
-                       labels = c('Intermittent: dry',
+                       values = c('#2988ad', '#fea534', '#ff6138'), #c('#d73027', '#fee090', '#4575b4', '#ffffff'),
+                       labels = c('Intermittent: dry channel',
                                   'Intermittent: disconnected pools',
                                   'Perennial',
-                                  '')) +
+                                  'Previous sampling date')) +
     scale_x_continuous(name = 'MDS1') +
     scale_y_continuous(name = 'MDS2') + 
     coord_fixed() +
@@ -1621,10 +1659,11 @@ plot_mantel_tests <- function(in_mantel_test_list) {
   
   mantel_plot <- ggplot(mantel_dt, aes(x=fecha, y=r)) +
     geom_path(aes(color=variable, linetype = dissim,
-                  group = interaction(dissim, variable))) +
-    geom_point(aes(color=variable, shape = dissim), size=3) +
+                  group = interaction(dissim, variable)),
+              linewidth = 1.3) +
+    geom_point(aes(color=variable, shape = dissim), size=4) +
     geom_point(data = mantel_dt[signif > 0.05,], 
-               aes(shape = dissim), color='grey', size=3) +
+               aes(shape = dissim), color='darkgrey', size=4) +
     scale_color_discrete(name = '', 
                          labels=c('Environment', 'Euclidean distance',
                                   'Network distance')) +
@@ -1949,27 +1988,66 @@ map_caynaca <- function(in_spenv_dt,
          units = 'in',
          dpi = 600)
   
+  return(out_plot)
+  
 }
 
-#--- Map drying --------------------------------------------------------------
+#--- Map drying and richness --------------------------------------------------------------
 # in_spenv_dt = tar_read(spenv_dt)
 # in_net = tar_read(net_directed)
 # in_sites_path = tar_read(sites_path)
 
-
-map_caynaca <- function(in_spenv_dt, 
+map_data <- function(in_spenv_dt, 
                         in_net,
                         in_sites_path,
-                        sites_IDcol,
-                        out_plot) {
+                        sites_IDcol) {
+  
   sites_vect <- vect(in_sites_path) %>%
     merge(in_spenv_dt, by.x = sites_IDcol, by.y = 'sitio')
    
-  ggplot(data=sites_vect) +
+  p_estado <- ggplot(data=sites_vect) +
     geom_sf(data = in_net, aes(linewidth=stream_order), color='grey') +
-    scale_linewidth_continuous(range=c(0.5,1.7)) +
-    geom_sf(aes(color=estado_de_flujo)) +
+    scale_linewidth_continuous(range=c(0.5,1.7), guide = "none") +
+    scale_color_manual(values = c('#2988ad', '#fea534', '#ff6138'),
+                       labels = c('Flowing', 'Isolated pools', 'Dry bed')) +
+    geom_sf(aes(color=estado_de_flujo), size=2) +
+    geom_text(aes(label=fecha, x= Inf, y = Inf),
+             hjust = 2, vjust = 3.3)+
     facet_wrap(~fecha) +
-    theme_void()
+    theme_void() +
+    theme(panel.spacing = unit(-2, "lines"),
+          strip.text = element_blank(),
+          legend.title = element_blank())
+
+  p_rich <- ggplot(data=sites_vect) +
+    geom_sf(data = in_net, aes(linewidth=stream_order), color='grey') +
+    scale_linewidth_continuous(range=c(0.5,1.7), guide = "none") +
+    geom_sf(aes(color=alpha_div), size=2.5) +
+    scale_color_gradientn(name=str_wrap('Taxonomic richness', 15),
+                          colours = viridis(256, direction=-1)) +
+    geom_text(aes(label=fecha, x= Inf, y = Inf),
+              hjust = 2, vjust = 3.3) +
+    facet_wrap(~fecha) +
+    theme_void()  +
+    theme(panel.spacing = unit(-2, "lines"),
+          strip.text = element_blank())
   
+  p_abund <- ggplot(data=sites_vect) +
+    geom_sf(data = in_net, aes(linewidth=stream_order), color='grey') +
+    scale_linewidth_continuous(range=c(0.5,1.7), guide = "none") +
+    geom_sf(aes(color=total), size=2.5) +
+    scale_color_gradientn(name=str_wrap('Abundance', 15),
+                          colours = viridis(256, direction=-1)) +
+    geom_text(aes(label=fecha, x= Inf, y = Inf),
+              hjust = 2, vjust = 3.3) +
+    facet_wrap(~fecha) +
+    theme_void()  +
+    theme(panel.spacing = unit(-2, "lines"),
+          strip.text = element_blank())
+  
+  return(list(
+    p_estado = p_estado,
+    p_rich = p_rich,
+    p_abund = p_abund
+  ))
 }

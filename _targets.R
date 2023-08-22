@@ -60,7 +60,12 @@ list(
           env_dt[, c('caso', 
                      names(env_dt)[!(names(env_dt) %in% names(sp_dt))]),
                  with=F], 
-          by='caso')
+          by='caso') %>%
+      .[, estado_de_flujo := factor(
+        estado_de_flujo, 
+        levels=c('F', 'IP', 'D'),
+        labels = c('Flowing', 'Isolated pools', 'Dry bed'))
+      ]
   )
   ,
   
@@ -161,6 +166,15 @@ list(
   ),
   
   tar_target(
+    net_directed,
+    direct_network(in_net = net_formatted,
+                   idcol = 'OBJECTID_1',
+                   outlet_id = 245
+                   )
+  )
+  ,
+  
+  tar_target(
     hillshade_bolivia,
     create_hillshade(in_dem = unserialize(basemaps$elev_bolivia),
                      z_exponent = 1.3)
@@ -171,16 +185,28 @@ list(
     create_hillshade(in_dem = unserialize(basemaps$elev_net),
                      z_exponent = 1.3)
   )
-  # ,
-  # 
-  # tar_target(
-  #   map_data,
-  #   map_caynaca(in_spenv_dt = spenv_dt,
-  #               in_net = net_formatted,
-  #               in_sites_path = sites_path,
-  #               in_basemaps = basemaps
-  #   )
-  # )
+  ,
+
+  tar_target(
+    mapped_caynaca,
+    map_caynaca(
+      in_spenv_dt = spenv_dt,
+      in_net = net_directed,
+      in_sites_path = sites_path,
+      in_basemaps = basemaps,
+      in_hillshade_bolivia = hillshade_bolivia,
+      in_hillshade_net = hillshade_net,
+      out_plot = file.path(resdir, 'figures_manuscript', 'study_map.png')
+    )
+  ),
+  
+  tar_target(
+    mapped_data,
+    map_data(in_spenv_dt = spenv_dt, 
+             in_net = net_directed,
+             in_sites_path = sites_path,
+             sites_IDcol = sites_IDcol)
+  )
 )
 
 

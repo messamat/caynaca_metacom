@@ -1,0 +1,98 @@
+---
+title: "Metacommunity dynamics in Caynaca watershed"
+author: "Mathis L. Messager"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, root.dir = "..", warnings=FALSE, messages=FALSE)
+library(targets)
+library(quantreg)
+tar_unscript()
+
+tar_load(mapped_caynaca)
+tar_load(mapped_data)
+tar_load(env_plots)
+tar_load(sp_plots)
+tar_load(spatial_beta_plots)
+tar_load(mantel_plots)
+tar_load(mapped_data)
+tar_load(mapped_caynaca)
+```
+
+```{r maps, echo=FALSE}
+knitr::include_graphics(mapped_caynaca) 
+
+mapped_data$p_estado
+mapped_data$p_rich
+mapped_data$p_abund
+```
+
+```{r envplots, echo=FALSE, fig.height = 8, fig.width = 12}
+env_plots$env_boxplots_bysites
+env_plots$env_distribs_plot
+```
+
+
+```{r envplots2, echo=FALSE, fig.height = 4, fig.width = 6}
+env_plots$estado_de_flujo_tsplot
+```
+```{r sp_plots, echo=FALSE, fig.height = 10, fig.width = 14}
+sp_plots$plot_sp_abundance_1 +
+  patchwork::plot_annotation(title = 'Distribution of species across sites - #1')
+sp_plots$plot_sp_abundance_2 +
+  patchwork::plot_annotation(title = 'Distribution of species across sites - #2')
+```
+```{r sp_plots2, echo=FALSE, fig.height = 4, fig.width = 8}
+sp_plots$plot_abundance_vs_time +
+  patchwork::plot_annotation(title = 'Total abundance over time')
+
+sp_plots$plot_relative_abundance_vs_time +
+  patchwork::plot_annotation(title = 'Relative abundance over time',
+                             caption = 'Thick colored lines represent LOESS fits across sites by long-term flow regime')
+
+sp_plots$plot_richness_vs_time +
+  patchwork::plot_annotation(title = 'Alpha and Gamma diversity over time',
+                             caption = 'Thick colored lines represent LOESS fits across sites by long-term flow regime')
+
+sp_plots$plot_relative_abundance_vs_relative_area +
+  patchwork::plot_annotation(caption = 'Lines represent quantile regression fits for 20th, 50th and 80th percentiles')
+
+sp_plots$plot_abundance_vs_area +
+  patchwork::plot_annotation(caption = 'Lines represent quantile regression fits for 20th, 50th and 80th percentiles')
+```
+
+```{r betaplots, echo=FALSE, fig.height = 4, fig.width = 6}
+tar_load(spatial_beta_plots)
+spatial_beta_plots$plot_beta_jaccard_fecha +
+  patchwork::plot_annotation(title = 'Beta diversity over time - Presence-absence | Jaccard')
+spatial_beta_plots$plot_beta_ruzicka_fecha +
+  patchwork::plot_annotation(title = 'Beta diversity over time - Abundance | Ruzicka')
+
+spatial_beta_plots$plot_beta_ruzicka_trans_fecha +
+  patchwork::plot_annotation(title = 'Beta diversity over time - Transformed abundance | Ruzicka')
+```
+
+Below is a plot of multivariate change in community composition (accounting for 
+transformed abundance) over the study period. 
+```{r betaplots2, echo=FALSE, fig.height = 5, fig.width = 10}
+spatial_beta_plots$plot_nmds_time +
+  patchwork::plot_annotation(title = 'Change in community composition over time - nMDS (abundance) | Bray-Curtis',
+                             caption = 'Light grey points and lines show the sites community composition in the previous sampling date and trajectory. 
+                             Dark grey points show those sites which have gone dry since the previous sampling date.')
+```
+
+```{r mantelplots, echo=FALSE, fig.height = 5, fig.width = 10}
+mantel_plots$mantel_plot  +
+  patchwork::plot_annotation(title = 'Drivers of community dissimilarity',
+                             caption = 'r value corresponds to Mantel test statistic. 
+                             For each sampling data: if the environmental distance matrix was non-euclidean or if there was insufficient spatial structure to produce a spatial weighting matrix: 
+                             a standard partial Mantel test controlling for euclidean (geographic) distance was run. 
+                             If the environmental distance matrix was euclidean and there was a positive spatial structure: 
+                             a Mantel test was performed based on spatially constrained randomizations using Moran spectral randomization with the best spatial weighting matrix (Crabot et al. 2019). 
+                             For network distance, a standard partial Mantel test was performed, controlling for euclidean (geographic) distance.
+                             For euclidean (geographic) distance, a standard (non-partial) Mantel test was run.')
+```
+
+
