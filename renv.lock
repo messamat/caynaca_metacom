@@ -35,17 +35,10 @@
     },
     "Matrix": {
       "Package": "Matrix",
-<<<<<<< HEAD
-      "Version": "1.5-1",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Hash": "539dc0c0c05636812f1080f473d2c177",
-=======
       "Version": "1.6-1",
       "Source": "Repository",
       "Repository": "CRAN",
       "Hash": "cb6855ac711958ca734b75e631b2035d",
->>>>>>> 211ec3d728b4fd7ff26e87a0724fabca1c80eb23
       "Requirements": [
         "lattice"
       ]
@@ -134,8 +127,6 @@
       "Hash": "1c0aa18b97e6aaa17f93b8b866c0ace5",
       "Requirements": []
     },
-<<<<<<< HEAD
-=======
     "SparseM": {
       "Package": "SparseM",
       "Version": "1.81",
@@ -144,7 +135,6 @@
       "Hash": "2042cd9759cc89a453c4aefef0ce9aae",
       "Requirements": []
     },
->>>>>>> 211ec3d728b4fd7ff26e87a0724fabca1c80eb23
     "XML": {
       "Package": "XML",
       "Version": "3.99-0.14",
@@ -1069,8 +1059,6 @@
         "askpass"
       ]
     },
-<<<<<<< HEAD
-=======
     "patchwork": {
       "Package": "patchwork",
       "Version": "1.1.3",
@@ -1084,7 +1072,6 @@
         "rlang"
       ]
     },
->>>>>>> 211ec3d728b4fd7ff26e87a0724fabca1c80eb23
     "permute": {
       "Package": "permute",
       "Version": "0.9-7",
@@ -1169,8 +1156,6 @@
       "Hash": "bd54ba8a0a5faded999a7aab6e46b374",
       "Requirements": []
     },
-<<<<<<< HEAD
-=======
     "prettymapr": {
       "Package": "prettymapr",
       "Version": "0.2.4",
@@ -1184,7 +1169,6 @@
         "rjson"
       ]
     },
->>>>>>> 211ec3d728b4fd7ff26e87a0724fabca1c80eb23
     "prettyunits": {
       "Package": "prettyunits",
       "Version": "1.1.1",
@@ -1262,8 +1246,6 @@
         "vctrs"
       ]
     },
-<<<<<<< HEAD
-=======
     "quantreg": {
       "Package": "quantreg",
       "Version": "5.97",
@@ -1278,7 +1260,6 @@
         "survival"
       ]
     },
->>>>>>> 211ec3d728b4fd7ff26e87a0724fabca1c80eb23
     "rappdirs": {
       "Package": "rappdirs",
       "Version": "0.3.3",
@@ -1349,37 +1330,6 @@
         "stringr"
       ]
     },
-<<<<<<< HEAD
-=======
-    "rgdal": {
-      "Package": "rgdal",
-      "Version": "1.6-7",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Hash": "10b777236c9e7855bc9dea8e347e30b7",
-      "Requirements": [
-        "sp"
-      ]
-    },
-    "rjson": {
-      "Package": "rjson",
-      "Version": "0.2.21",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Hash": "f9da75e6444e95a1baf8ca24909d63b9",
-      "Requirements": []
-    },
->>>>>>> 211ec3d728b4fd7ff26e87a0724fabca1c80eb23
-    "rlang": {
-      "Package": "rlang",
-      "Version": "1.1.1",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Hash": "a85c767b55f0bf9b7ad16c6d7baee5bb",
-      "Requirements": []
-    },
-<<<<<<< HEAD
-=======
     "rmarkdown": {
       "Package": "rmarkdown",
       "Version": "2.24",
@@ -1400,7 +1350,6 @@
         "yaml"
       ]
     },
->>>>>>> 211ec3d728b4fd7ff26e87a0724fabca1c80eb23
     "rncl": {
       "Package": "rncl",
       "Version": "0.8.7",
@@ -1412,27 +1361,6 @@
         "progress"
       ]
     },
-<<<<<<< HEAD
-=======
-    "rosm": {
-      "Package": "rosm",
-      "Version": "0.2.6",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Hash": "28c1e811f574441769c93e5367726c8e",
-      "Requirements": [
-        "abind",
-        "curl",
-        "jpeg",
-        "plyr",
-        "png",
-        "prettymapr",
-        "rgdal",
-        "rjson",
-        "sp"
-      ]
-    },
->>>>>>> 211ec3d728b4fd7ff26e87a0724fabca1c80eb23
     "rprojroot": {
       "Package": "rprojroot",
       "Version": "2.0.3",
@@ -1678,19 +1606,6 @@
         "vctrs"
       ]
     },
-<<<<<<< HEAD
-=======
-    "survival": {
-      "Package": "survival",
-      "Version": "3.4-0",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Hash": "04411ae66ab4659230c067c32966fc20",
-      "Requirements": [
-        "Matrix"
-      ]
-    },
->>>>>>> 211ec3d728b4fd7ff26e87a0724fabca1c80eb23
     "sys": {
       "Package": "sys",
       "Version": "3.4.2",
@@ -1823,8 +1738,6 @@
         "tidyr"
       ]
     },
-<<<<<<< HEAD
-=======
     "tinytex": {
       "Package": "tinytex",
       "Version": "0.46",
@@ -1835,7 +1748,6 @@
         "xfun"
       ]
     },
->>>>>>> 211ec3d728b4fd7ff26e87a0724fabca1c80eb23
     "units": {
       "Package": "units",
       "Version": "0.8-3",

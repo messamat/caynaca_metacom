@@ -13,7 +13,13 @@ overwrite <- T
 list(
   tar_target(
     rawdata_path,
-    file.path(datadir, 'alltaxa.xls')
+    file.path(datadir, 'alltaxa_mod.xls')
+  )
+  ,
+  
+  tar_target(
+    funcdata_path,
+    file.path(datadir, 'relative_abundance_bio_traits.xlsx')
   )
   ,
   
@@ -81,6 +87,13 @@ list(
   )
   ,
   
+  # tar_target(
+  #   func_plots,
+  #   plot_funcdata(
+  #     
+  #   )
+  # )
+  
   tar_target(
     net_formatted,
     fix_net_dangles(in_net = net_path,
@@ -147,7 +160,7 @@ list(
   ,
 
   tar_target(
-    mantel_test_list,
+    mantel_dt,
     compute_mantel(in_spenv_dt = spenv_dt,
                    in_spatial_beta = spatial_beta,
                    in_env_dist = env_dist,
@@ -157,7 +170,7 @@ list(
   
   tar_target(
     mantel_plots,
-    plot_mantel_tests(in_mantel_test_list = mantel_test_list)
+    plot_mantel_tests(in_mantel_dt = mantel_dt)
   ),
   
   tar_target(

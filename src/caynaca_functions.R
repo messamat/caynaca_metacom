@@ -149,130 +149,6 @@ BCD <-
     res
   }
 
-#---- direct network ----------------------------------------------------------
-# in_net <- tar_read(net_formatted)
-# idcol <- 'OBJECTID_1'
-# outlet_id <- 245
-
-direct_network <- function(in_net,
-                           idcol,
-                           outlet_id
-) {
-  #------------------ Split lines at intersections -----------------------------
-  st_precision(in_net) <- 0.05 #Reduce precision to make up for imperfect geometry alignments
-  
-  #Remove artefacts in network
-  in_net <- in_net[in_net$length > 0.1 &
-                     in_net[[idcol]] != 73,] 
-  
-  #Get outlet
-  outlet_p <-  st_cast(in_net[in_net[[idcol]] == outlet_id,], "POINT") %>%
-    .[nrow(.),]
-  
-  sfnet <- as_sfnetwork(in_net) %>%
-    activate(edges) %>%
-    arrange(edge_length()) %>%
-    tidygraph::convert(to_spatial_simple) %>% #Remove loops
-    tidygraph::convert(to_spatial_smooth) %>% #Remove pseudo nodes (doesn't work well)
-    tidygraph::convert(to_spatial_subdivision) #Split at intersections
-  
-  net<- activate(sfnet, "edges") %>% #Grab edges
-    st_as_sf() 
-  net$newID <- seq_len(nrow(net)) #Create new IDs because of merging and resplitting
-  
-  #Get newID for outlet
-  outlet_newID <- sf::st_intersection(net,
-                                      outlet_p)[['newID']]
-  
-  #------------------ Identify dangle points -----------------------------------
-  search_dangles <- function(in_network, idcol) {
-    if (nrow(in_network) > 1) {
-      #Get sfnetwork
-      sfnet <- as_sfnetwork(in_network) %>%
-        activate("edges") %>%
-        arrange(edge_length()) %>%
-        tidygraph::convert(to_spatial_subdivision) 
-      
-      edges <- activate(sfnet, "edges") %>%
-        st_as_sf()
-      nodes <- activate(sfnet, "nodes") %>%
-        st_as_sf()                                
-      
-      #Intersect nodes and edges
-      nodes_edges_inters <- sf::st_intersection(edges,
-                                                nodes) %>%
-        as.data.table
-      
-      #Identify nodes that intersect with only one edge (dangle points)
-      dangle_points <- nodes_edges_inters[
-        !(duplicated(nodes_edges_inters$.tidygraph_node_index) |
-            duplicated(nodes_edges_inters$.tidygraph_node_index, fromLast = T)),
-      ]
-      
-      #Plot network with dangle points
-      netp <- ggplot() +
-        geom_sf(data = edges, linewidth=1.2, color='blue') +
-        geom_sf(data=  st_as_sf(dangle_points))
-      
-      print(netp)
-      
-      #Return newID for dangle points
-      return(dangle_points[[idcol]])
-    } else {
-      return(NULL)
-    }
-  }
-  
-  #Set up loop that will iteratively identify dangle points, remove the associated
-  #lowest-order edges from network, then re-identify dangle points, removing the 
-  #associated lowest-order edges from network, and so on, iteratively, until
-  #only the outlet edge remains
-  
-  dangles <- 'go!'
-  order <- 1
-  net_list <- list() #List into which each subsequent set of edges will be written
-  
-  while (length(dangles) > 0) {
-    dangles <- search_dangles(in_network=net, idcol='newID') #identify dangle points
-    
-    dangle_segs_boolean <- (net[['newID']] %in% dangles &
-                              net[['newID']] != outlet_newID)
-    
-    net[dangle_segs_boolean, 'stream_order'] <- order #assign the associated edges a stream order
-    net_list[[order]] <-  net[dangle_segs_boolean,] #Write these edges to the list
-    net <- net[!(dangle_segs_boolean),] #Remove these edges from the network
-    order <- order + 1 
-    
-    net  <- as_sfnetwork(net) %>% 
-      activate(edges) %>%
-      arrange(edge_length()) %>%
-      tidygraph::convert(to_spatial_smooth) %>% #Re-dissolve edges
-      tidygraph::convert(to_spatial_simple) %>%
-      st_as_sf()
-    net$newID <- seq_len(nrow(net)) #Re-assign new IDs
-    
-    outlet_newID <- sf::st_intersection(net, #Re-dentify ID for outlet
-                                        outlet_p)[['newID']]
-    print(outlet_newID)
-    
-    st_precision(net) <- 0.05 #Make sure the correct precision is set up so that even edges that don't perfectly match can be linked
-    
-    write_sf(net[, c(idcol, 'newID')], #Write out intermediate network layer
-             file.path(resdir, paste0('check', order, '.shp')),
-             overwrite = T
-    )
-  }
-  #Add the outlet edge
-  net_list[[order]] <- net
-  net_list[[order]]$stream_order <- order
-  
-  #Create a single sf
-  out_net <- do.call(rbind, lapply(net_list, st_sf))
-  
-  return(out_net)
-}
-
-
 #------------------ WORKFLOW FUNCTIONS -------------------------------------------
 # in_sp_dt <- tar_read(rawdata_sp)
 # in_env_dt <- tar_read(rawdata_env)
@@ -387,6 +263,9 @@ plot_spdata <- function(in_spenv_dt, in_sp_dt) {
       labels = c('Intermittent: dry',
                  'Intermittent: disconnected pools',
                  'Perennial')) +
+    scale_x_datetime(name = 'Date', 
+                     breaks = '2 months',
+                     labels = date_format("%b")) +
     scale_y_sqrt() + 
     theme_bw()
   
@@ -394,18 +273,21 @@ plot_spdata <- function(in_spenv_dt, in_sp_dt) {
   #by site, colored by site's intermittency status
   plot_relative_abundance_vs_time <- ggplot(in_spenv_dt, 
                                             aes(x=fecha, y=total_relative)) + 
-    geom_line(aes(color=intermitencia, group=sitio), alpha=0.8) + 
-    geom_smooth(aes(x=as.numeric(factor(fecha)), color=intermitencia), 
+    geom_line(aes(color=intermitencia, group=sitio), alpha=0.8) +
+    geom_smooth(aes(x=fecha, color=intermitencia),
                 linewidth=2.5, span=0.5, se=F
-    ) +    
+    ) +
     scale_color_manual(
       name = stringr::str_wrap('Long-term flow regime', 30),
       values = c('#d73027', '#fdb863', '#4575b4'),
       labels = c('Intermittent: dry',
                  'Intermittent: disconnected pools',
                  'Perennial')) +
+    scale_x_datetime(name = 'Date', 
+                     breaks = '2 months',
+                     labels = date_format("%b")) +
     scale_y_continuous(name='Relative abundance') +
-    coord_cartesian(ylim=c(0,100), clip="off") + 
+    coord_cartesian(ylim=c(0,100), expand=F, clip="on") + 
     theme_bw() 
   
   #Line plot of richness over time 
@@ -418,11 +300,14 @@ plot_spdata <- function(in_spenv_dt, in_sp_dt) {
                   lty=cuenca), color='black',
               linewidth=1.5) +
     geom_line(aes(y=alpha_div, color=intermitencia, group=sitio)) + 
-    geom_smooth(aes(x=as.numeric(factor(fecha)), y=alpha_div,
+    geom_smooth(aes(x=fecha, y=alpha_div,
                     color=intermitencia), 
                 linewidth=2, span=0.5, se=F
     ) +
     scale_y_continuous(name='Diversity') +
+    scale_x_datetime(name = 'Date', 
+                     breaks = '2 months',
+                     labels = date_format("%b")) +
     scale_linetype(name='', labels=c('Gamma diversity')) +
     scale_color_manual(
       name = stringr::str_wrap('Long-term flow regime', 30),
@@ -432,7 +317,7 @@ plot_spdata <- function(in_spenv_dt, in_sp_dt) {
                  'Perennial')) +
     guides(linetype = guide_legend(order = 1), 
            colour = guide_legend(order = 2)) +
-    coord_cartesian(ylim=c(0,65), expand=F, clip="off") + 
+    coord_cartesian(ylim=c(0,65), expand=F, clip="on") + 
     theme_bw() 
   
   #Scatterplot of relative abundance against relative channel cross section area
@@ -518,7 +403,7 @@ plot_envdata <- function(in_env_dt) {
     estado_de_flujo = .SD[, .N, by=estado_de_flujo]$estado_de_flujo,
     rel_freq = .SD[, .N, by=estado_de_flujo]$N/.N), 
     by=fecha] %>%
-    merge(expand.grid(c(paste0('fecha', seq(1,6))),
+    merge(expand.grid(unique(in_env_dt$fecha),
                       c('Flowing', 'Isolated pools', 'Dry bed')),
           by.x=c('fecha', 'estado_de_flujo'),
           by.y=c('Var1', 'Var2'),
@@ -531,6 +416,9 @@ plot_envdata <- function(in_env_dt) {
                   fill=estado_de_flujo, group=estado_de_flujo),
               position='stack') +
     scale_y_continuous(name = 'Relative frequency of flow states across sites') +
+    scale_x_datetime(name = 'Date', 
+                     breaks = '2 months',
+                     labels = date_format("%b")) +
     scale_fill_manual(
       name = 'Flow state',
       values = c('#2988ad', '#fea534', '#ff6138')) +
@@ -1164,15 +1052,16 @@ plot_spatial_beta <- function(in_spatial_beta) {
   plot_beta_jaccard_fecha <- ggplot() +
     geom_area(data = beta_jaccard_melt[variable != 'BDtotal'],
               aes(x=fecha, y=value, 
-                  position = 'stack',
                   fill=variable, group=variable)) +
     geom_line(data = beta_jaccard_melt[variable == 'BDtotal'],
               aes(x=fecha, y=value, group=variable, color=variable),
-              size=1) + 
+              linewidth=1) + 
     scale_color_manual(values ='black',
                        labels = 'Total beta diversity') +
     scale_fill_discrete(labels=c('Replacement', 'Richness difference')) +
-    scale_x_discrete(name='Date') +
+    scale_x_datetime(name = 'Date', 
+                     breaks = '2 months',
+                     labels = date_format("%b")) +
     scale_y_continuous(limits=c(0,0.5), 
                        name='Value') +
     coord_cartesian(expand=F) +
@@ -1210,7 +1099,6 @@ plot_spatial_beta <- function(in_spatial_beta) {
   plot_beta_ruzicka_fecha <- ggplot() +
     geom_area(data = beta_ruzicka_melt[variable != 'BDtotal'],
               aes(x=fecha, y=value,
-                  position = 'stack',
                   fill=variable, group=variable)) +
     geom_line(data = beta_ruzicka_melt[variable == 'BDtotal'],
               aes(x=fecha, y=value, group=variable, color=variable),
@@ -1219,7 +1107,9 @@ plot_spatial_beta <- function(in_spatial_beta) {
                        labels = 'Total beta diversity') +
     scale_fill_discrete(labels=c('Replacement',
                                  'Richness difference')) +
-    scale_x_discrete(name='Date') +
+    scale_x_datetime(name = 'Date', 
+                     breaks = '2 months',
+                     labels = date_format("%b")) +
     scale_y_continuous(limits=c(0,0.5),
                        name='Value') +
     coord_cartesian(expand=F) +
@@ -1234,7 +1124,6 @@ plot_spatial_beta <- function(in_spatial_beta) {
   plot_beta_ruzicka_trans_fecha <- ggplot() +
     geom_area(data = beta_ruzicka_trans_melt[variable != 'BDtotal'],
               aes(x=fecha, y=value,
-                  position = 'stack',
                   fill=variable, group=variable)) +
     geom_line(data = beta_ruzicka_trans_melt[variable == 'BDtotal'],
               aes(x=fecha, y=value, group=variable, color=variable),
@@ -1243,7 +1132,9 @@ plot_spatial_beta <- function(in_spatial_beta) {
                        labels = 'Total beta diversity') +
     scale_fill_discrete(labels=c('Replacement',
                                  'Richness difference')) +
-    scale_x_discrete(name='Date') +
+    scale_x_datetime(name = 'Date', 
+                     breaks = '2 months',
+                     labels = date_format("%b")) +
     scale_y_continuous(limits=c(0,0.5),
                        name='Value') +
     coord_cartesian(expand=F) +
@@ -1260,7 +1151,7 @@ plot_spatial_beta <- function(in_spatial_beta) {
   nMDS_dt_forplot <- in_spatial_beta$nmds_bray_dt %>%
     merge(
       setnames(
-        expand.grid(c(paste0('fecha', seq(1,6))),
+        expand.grid(unique(.$fecha),
                     unique(.$sitio)),
         c('fecha', 'sitio')
       ),
@@ -1271,8 +1162,6 @@ plot_spatial_beta <- function(in_spatial_beta) {
              MDS2_lag = lag(MDS2),
              estado_de_flujo_lag = lag(estado_de_flujo)),
       by=sitio]
-  
-  nMDS_dt_forplot
   
   plot_nmds_time <- ggplot() +
     geom_point(data= nMDS_dt_forplot,
@@ -1306,7 +1195,7 @@ plot_spatial_beta <- function(in_spatial_beta) {
     scale_x_continuous(name = 'MDS1') +
     scale_y_continuous(name = 'MDS2') + 
     coord_fixed() +
-    facet_wrap(~fecha) +
+    facet_wrap(~fecha, labeller= function(x) format(x, '%b')) +
     theme_classic()
   
   return(list(
@@ -1364,8 +1253,10 @@ compute_mantel <- function(
                            function(x) x^(1/5)),
       .SDcols = spcols]
   
+  fecha1 = as.POSIXct('2021-03-27', 'UTC')
+  
   #Check multivariate empirical variogram for Jaccard distance
-  vario_presabs <- adespatial::variogmultiv(presabs_dt_spcols_fecha[fecha=='fecha1', 
+  vario_presabs <- adespatial::variogmultiv(presabs_dt_spcols_fecha[fecha==fecha1, 
                                                                     -'fecha', with=F],
                                             xy,
                                             nclass=5)
@@ -1380,7 +1271,7 @@ compute_mantel <- function(
   )
   
   #Check multivariate empirical variogram for Bray-Curtis distance
-  vario_abund <- spcols_abund[fecha=='fecha1', 
+  vario_abund <- spcols_abund[fecha==fecha1, 
                               -'fecha', with=F] %>%
     .[, sapply(.SD, function(x) x^1/5)] %>%
     variogmultiv(xy,
@@ -1507,8 +1398,8 @@ compute_mantel <- function(
         run_msr_mantel(
           in_xy = xy,
           in_resp = presabs_dt_spcols_fecha[fecha==in_fecha, -'fecha', with=F],
-          in_pred_dist = as.matrix(in_env_dist$gow_dist_weighted_byfecha[[in_fecha]]),
-          in_resp_dist =  in_spatial_beta$jaccard_mats[[in_fecha]],
+          in_pred_dist = as.matrix(in_env_dist$gow_dist_weighted_byfecha[[as.character(in_fecha)]]),
+          in_resp_dist =  in_spatial_beta$jaccard_mats[[as.character(in_fecha)]],
           simple_test = FALSE,
           sqrt_pred_dist = TRUE,
           nullify_NAs = TRUE,
@@ -1528,7 +1419,7 @@ compute_mantel <- function(
           in_xy = xy,
           in_resp = presabs_dt_spcols_fecha[fecha==in_fecha, -'fecha', with=F],
           in_pred_dist = as.matrix(in_net_dist),
-          in_resp_dist =  in_spatial_beta$jaccard_mats[[in_fecha]],
+          in_resp_dist =  in_spatial_beta$jaccard_mats[[as.character(in_fecha)]],
           simple_test = FALSE,
           sqrt_pred_dist = FALSE,
           nullify_NAs = TRUE,
@@ -1546,9 +1437,9 @@ compute_mantel <- function(
       return(
         run_msr_mantel(
           in_xy = xy,
-          in_resp = spcols_abund_trans[fecha=='fecha1', -'fecha', with=F],
-          in_pred_dist = as.matrix(in_env_dist$gow_dist_weighted_byfecha[[in_fecha]]),
-          in_resp_dist =  in_spatial_beta$bray_mats[[in_fecha]],
+          in_resp = spcols_abund_trans[fecha==fecha1, -'fecha', with=F],
+          in_pred_dist = as.matrix(in_env_dist$gow_dist_weighted_byfecha[[as.character(in_fecha)]]),
+          in_resp_dist =  in_spatial_beta$bray_mats[[as.character(in_fecha)]],
           simple_test = FALSE,
           sqrt_pred_dist = TRUE,
           nullify_NAs = TRUE,
@@ -1566,9 +1457,9 @@ compute_mantel <- function(
       return(
         run_msr_mantel(
           in_xy = xy,
-          in_resp = spcols_abund_trans[fecha=='fecha1', -'fecha', with=F],
+          in_resp = spcols_abund_trans[fecha==fecha1, -'fecha', with=F],
           in_pred_dist = as.matrix(in_net_dist),
-          in_resp_dist =  in_spatial_beta$bray_mats[[in_fecha]],
+          in_resp_dist =  in_spatial_beta$bray_mats[[as.character(in_fecha)]],
           simple_test = FALSE,
           sqrt_pred_dist = FALSE,
           nullify_NAs = TRUE,
@@ -1588,7 +1479,7 @@ compute_mantel <- function(
       out_list <- run_msr_mantel(
         in_xy = xy,
         in_pred_dist = as.matrix(in_euc_dist$distmat),
-        in_resp_dist =  in_spatial_beta$jaccard_mats[[in_fecha]],
+        in_resp_dist =  in_spatial_beta$jaccard_mats[[as.character(in_fecha)]],
         simple_test = TRUE,
         sqrt_pred_dist = FALSE,
         nullify_NAs = TRUE,
@@ -1608,7 +1499,7 @@ compute_mantel <- function(
       out_list <- run_msr_mantel(
         in_xy = xy,
         in_pred_dist = as.matrix(in_euc_dist$distmat),
-        in_resp_dist =  in_spatial_beta$bray_mats[[in_fecha]],
+        in_resp_dist =  in_spatial_beta$bray_mats[[as.character(in_fecha)]],
         simple_test = TRUE,
         sqrt_pred_dist = FALSE,
         nullify_NAs = TRUE,
@@ -1623,7 +1514,7 @@ compute_mantel <- function(
     as.dist(in_net_dist)
   )
   
-  return(list(
+  mantel_test_list <- list(
     jaccard_mantel_envdist_list = jaccard_mantel_envdist_list,
     jaccard_mantel_netdist_list = jaccard_mantel_netdist_list,
     jaccard_mantel_eucdist_list = jaccard_mantel_eucdist_list,
@@ -1631,13 +1522,7 @@ compute_mantel <- function(
     bray_mantel_netdist_list = bray_mantel_netdist_list,
     bray_mantel_eucdist_list = bray_mantel_eucdist_list,
     mantel_netdist_eucdist = mantel_netdist_eucdist
-  ))
-}
-
-#--- Plot Mantel tests results ----------------------------------------------
-#in_mantel_test_list <- tar_read(mantel_test_list)
-
-plot_mantel_tests <- function(in_mantel_test_list) {
+  )
   
   #Format all mantel test results in a single dt
   mantel_dt <- 
@@ -1645,24 +1530,32 @@ plot_mantel_tests <- function(in_mantel_test_list) {
       lapply(
         list('envdist', 'netdist', 'eucdist'), function(mat) {
           lapply(
-            in_mantel_test_list[[paste0(
+            mantel_test_list[[paste0(
               dissimilarity, '_mantel_', mat, '_list')]], 
             function(x) x[2:4]) %>%
             rbindlist %>%
             .[, `:=`(variable = mat,
                      dissim = dissimilarity,
-                     fecha = paste0('fecha', seq(1,6)))]
+                     fecha = unique(in_spenv_dt$fecha))]
         }) %>%
         rbindlist
     }) %>%
     rbindlist
   
-  mantel_plot <- ggplot(mantel_dt, aes(x=fecha, y=r)) +
+  return(mantel_dt)
+}
+
+#--- Plot Mantel tests results ----------------------------------------------
+#in_mantel_test_list <- tar_read(mantel_test_list)
+
+plot_mantel_tests <- function(in_mantel_dt) {
+  
+  mantel_plot <- ggplot(in_mantel_dt, aes(x=fecha, y=r)) +
     geom_path(aes(color=variable, linetype = dissim,
                   group = interaction(dissim, variable)),
               linewidth = 1.3) +
     geom_point(aes(color=variable, shape = dissim), size=4) +
-    geom_point(data = mantel_dt[signif > 0.05,], 
+    geom_point(data = in_mantel_dt[signif > 0.05,], 
                aes(shape = dissim), color='darkgrey', size=4) +
     scale_color_discrete(name = '', 
                          labels=c('Environment', 'Euclidean distance',
@@ -1673,12 +1566,14 @@ plot_mantel_tests <- function(in_mantel_test_list) {
     scale_linetype_discrete(name='Dissimilarity measure',
                             labels=c('Bray-Curtis (abundance)', 
                                      'Jaccard (presence-absence)')) +
+    scale_x_datetime(name = 'Date', 
+                     breaks = '2 months',
+                     labels = date_format("%b")) +
     theme_classic() +
     theme(axis.title.x = element_blank())
   
   return(list(
-    mantel_plot = mantel_plot,
-    mantel_dt = mantel_dt
+    mantel_plot = mantel_plot
   ))
   
   
@@ -1689,6 +1584,133 @@ plot_mantel_tests <- function(in_mantel_test_list) {
   
   
 }
+
+#---- direct network ----------------------------------------------------------
+# in_net <- tar_read(net_formatted)
+# idcol <- 'OBJECTID_1'
+# outlet_id <- 245
+
+direct_network <- function(in_net,
+                           idcol,
+                           outlet_id
+) {
+  #------------------ Split lines at intersections -----------------------------
+  st_precision(in_net) <- 0.05 #Reduce precision to make up for imperfect geometry alignments
+  
+  #Remove artefacts in network
+  in_net <- in_net[in_net$length > 0.1 &
+                     in_net[[idcol]] != 73,] 
+  
+  #Get outlet
+  outlet_p <-  st_cast(in_net[in_net[[idcol]] == outlet_id,], "POINT") %>%
+    .[nrow(.),]
+  
+  sfnet <- as_sfnetwork(in_net) %>%
+    activate(edges) %>%
+    arrange(edge_length()) %>%
+    tidygraph::convert(to_spatial_simple) %>% #Remove loops
+    tidygraph::convert(to_spatial_smooth) %>% #Remove pseudo nodes (doesn't work well)
+    tidygraph::convert(to_spatial_subdivision) #Split at intersections
+  
+  net<- activate(sfnet, "edges") %>% #Grab edges
+    st_as_sf() 
+  net$newID <- seq_len(nrow(net)) #Create new IDs because of merging and resplitting
+  
+  st_precision(net) <- 0.05
+  
+  #Get newID for outlet
+  outlet_newID <- sf::st_intersection(net,
+                                      outlet_p)[['newID']]
+  
+  #------------------ Identify dangle points -----------------------------------
+  search_dangles <- function(in_network, idcol) {
+    if (nrow(in_network) > 1) {
+      #Get sfnetwork
+      sfnet <- as_sfnetwork(in_network) %>%
+        activate("edges") %>%
+        arrange(edge_length()) %>%
+        tidygraph::convert(to_spatial_subdivision) 
+      
+      edges <- activate(sfnet, "edges") %>%
+        st_as_sf()
+      nodes <- activate(sfnet, "nodes") %>%
+        st_as_sf()                                
+      
+      #Intersect nodes and edges
+      nodes_edges_inters <- sf::st_intersection(edges,
+                                                nodes) %>%
+        as.data.table
+      
+      #Identify nodes that intersect with only one edge (dangle points)
+      dangle_points <- nodes_edges_inters[
+        !(duplicated(nodes_edges_inters$.tidygraph_node_index) |
+            duplicated(nodes_edges_inters$.tidygraph_node_index, fromLast = T)),
+      ]
+      
+      #Plot network with dangle points
+      netp <- ggplot() +
+        geom_sf(data = edges, linewidth=1.2, color='blue') +
+        geom_sf(data=  st_as_sf(dangle_points))
+      
+      print(netp)
+      
+      #Return newID for dangle points
+      return(dangle_points[[idcol]])
+    } else {
+      return(NULL)
+    }
+  }
+  
+  #Set up loop that will iteratively identify dangle points, remove the associated
+  #lowest-order edges from network, then re-identify dangle points, removing the 
+  #associated lowest-order edges from network, and so on, iteratively, until
+  #only the outlet edge remains
+  
+  dangles <- 'go!'
+  order <- 1
+  net_list <- list() #List into which each subsequent set of edges will be written
+  
+  while (length(dangles) > 0) {
+    dangles <- search_dangles(in_network=net, idcol='newID') #identify dangle points
+    
+    dangle_segs_boolean <- (net[['newID']] %in% dangles &
+                              net[['newID']] != outlet_newID)
+    
+    net[dangle_segs_boolean, 'stream_order'] <- order #assign the associated edges a stream order
+    net_list[[order]] <-  net[dangle_segs_boolean,] #Write these edges to the list
+    net <- net[!(dangle_segs_boolean),] #Remove these edges from the network
+    order <- order + 1 
+    
+    net  <- as_sfnetwork(net) %>% 
+      activate(edges) %>%
+      arrange(edge_length()) %>%
+      tidygraph::convert(to_spatial_smooth) %>% #Re-dissolve edges
+      tidygraph::convert(to_spatial_simple) %>%
+      st_as_sf()
+    net$newID <- seq_len(nrow(net)) #Re-assign new IDs
+    
+    #Make sure the correct precision is set up so that even edges that don't perfectly match can be linked
+    st_precision(net) <- 0.05
+    
+    outlet_newID <- sf::st_intersection(net, #Re-dentify ID for outlet
+                                        outlet_p)[['newID']]
+    print(outlet_newID)
+    
+    write_sf(net[, c(idcol, 'newID')], #Write out intermediate network layer
+             file.path(resdir, paste0('check', order, '.shp')),
+             overwrite = T
+    )
+  }
+  #Add the outlet edge
+  net_list[[order]] <- net
+  net_list[[order]]$stream_order <- order
+  
+  #Create a single sf
+  out_net <- do.call(rbind, lapply(net_list, st_sf))
+  
+  return(out_net)
+}
+
 
 #--- Download basemap data -------
 #out_path <- file.path(resdir, 'basemap_data')
@@ -1811,42 +1833,29 @@ create_hillshade <- function(in_dem, z_exponent, write=F, out_path) {
 
 
 #--- Map sites --------------------------------------------------------------
-<<<<<<< HEAD
-in_spenv_dt = tar_read(spenv_dt)
-in_net = tar_read(net_directed)
-in_sites_path = tar_read(sites_path)
-in_basemaps <- tar_read(basemaps)
-in_hillshade_bolivia <- tar_read(hillshade_bolivia)
-in_hillshade_net <- tar_read(hillshade_net)
-=======
 # in_net = tar_read(net_directed)
 # in_sites_path = tar_read(sites_path)
 # in_basemaps <- tar_read(basemaps)
 # in_hillshade_bolivia <- tar_read(hillshade_bolivia)
 # in_hillshade_net <- tar_read(hillshade_net)
->>>>>>> 211ec3d728b4fd7ff26e87a0724fabca1c80eb23
 
 map_caynaca <- function(in_spenv_dt, 
                         in_net,
                         in_sites_path,
                         in_basemaps,
                         in_hillshade_bolivia,
-<<<<<<< HEAD
-                        in_hillshade_net) {
-=======
                         in_hillshade_net,
                         out_plot) {
->>>>>>> 211ec3d728b4fd7ff26e87a0724fabca1c80eb23
   #------------ Make watershed map ---------------------------------------------
   netbbox <- ext(vect(in_net))
   
   elev_net <- unserialize(in_basemaps$elev_net) %>%
     terra::project("epsg:32720") %>%
-    crop(netbbox + 1000) 
+    terra::crop(netbbox + 1000) 
   
   #Load and crop hillshade
   hilldf_net <- unserialize(in_hillshade_net) %>%
-    crop(netbbox + 1000) 
+    terra::crop(netbbox + 1000) 
   
   #Format Hillshade map - https://dieghernan.github.io/202210_tidyterra-hillshade/
   # normalize names
@@ -1881,14 +1890,9 @@ map_caynaca <- function(in_spenv_dt,
       data = hilldf_net, fill = vector_cols, maxcell = Inf,
       alpha = 0.6
     ) +
-<<<<<<< HEAD
-    scale_x_continuous(breaks=br_x) +
-    scale_y_continuous(breaks=br_y)
-=======
     scale_x_continuous(breaks=br_x, expand=c(0,0)) +
     scale_y_continuous(breaks=br_y, expand=c(0,0))
->>>>>>> 211ec3d728b4fd7ff26e87a0724fabca1c80eb23
-  
+
   #Format full map
   r_limits <- minmax(elev_net$srtm_23_16) %>% as.vector() 
   r_limits <-  c(floor(r_limits[1] / 500), 
@@ -1917,12 +1921,6 @@ map_caynaca <- function(in_spenv_dt,
     geom_spatvector(data = vect(in_sites_path), 
                     color='black',
                     size = 1.75) +
-<<<<<<< HEAD
-    #theme_minimal(base_family = "notoserif") +
-    theme(legend.position = "none",
-          panel.grid = element_blank(),
-          panel.background = element_rect(color='white'))
-=======
     theme_minimal() +
     theme(legend.position = "none",
           panel.grid = element_blank(),
@@ -1931,8 +1929,6 @@ map_caynaca <- function(in_spenv_dt,
     ggspatial::annotation_north_arrow(location = "bl", which_north = "true", 
                                       pad_x = unit(0.0, "in"), pad_y = unit(0.2, "in"),
                                       style = north_arrow_fancy_orienteering)
->>>>>>> 211ec3d728b4fd7ff26e87a0724fabca1c80eb23
-  
   
   #------------ Make inset map -------------------------------------------------
   admin <- unserialize(in_basemaps$admin)%>%
@@ -2036,9 +2032,9 @@ map_data <- function(in_spenv_dt,
     scale_color_manual(values = c('#2988ad', '#fea534', '#ff6138'),
                        labels = c('Flowing', 'Isolated pools', 'Dry bed')) +
     geom_sf(aes(color=estado_de_flujo), size=2) +
-    geom_text(aes(label=fecha, x= Inf, y = Inf),
-             hjust = 2, vjust = 3.3)+
-    facet_wrap(~fecha) +
+    geom_text(aes(label=format(fecha, '%b'), x= Inf, y = Inf),
+              hjust = 2, vjust = 3.3)+
+    facet_wrap(~fecha, labeller = function(x) format(x, '%b')) +
     theme_void() +
     theme(panel.spacing = unit(-2, "lines"),
           strip.text = element_blank(),
@@ -2050,9 +2046,9 @@ map_data <- function(in_spenv_dt,
     geom_sf(aes(color=alpha_div), size=2.5) +
     scale_color_gradientn(name=str_wrap('Taxonomic richness', 15),
                           colours = viridis(256, direction=-1)) +
-    geom_text(aes(label=fecha, x= Inf, y = Inf),
+    geom_text(aes(label=format(fecha, '%b'), x= Inf, y = Inf),
               hjust = 2, vjust = 3.3) +
-    facet_wrap(~fecha) +
+    facet_wrap(~fecha, labeller = function(x) format(x, '%b')) +
     theme_void()  +
     theme(panel.spacing = unit(-2, "lines"),
           strip.text = element_blank())
@@ -2063,7 +2059,7 @@ map_data <- function(in_spenv_dt,
     geom_sf(aes(color=total), size=2.5) +
     scale_color_gradientn(name=str_wrap('Abundance', 15),
                           colours = viridis(256, direction=-1)) +
-    geom_text(aes(label=fecha, x= Inf, y = Inf),
+    geom_text(aes(label=format(fecha, '%b'), x= Inf, y = Inf),
               hjust = 2, vjust = 3.3) +
     facet_wrap(~fecha) +
     theme_void()  +

@@ -19,15 +19,13 @@ library(plyr)
 library(quantreg)
 library(scales)
 library(sfnetworks)
+library(splines)
 library(stringr)
 library(targets)
 library(terra)
 library(tidygraph)
 library(tidyterra)
-<<<<<<< HEAD
-=======
 library(viridis)
->>>>>>> 211ec3d728b4fd7ff26e87a0724fabca1c80eb23
 library(vegan)
 library(zoo)
 
