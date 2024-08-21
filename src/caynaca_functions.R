@@ -1,5 +1,5 @@
-#------------------ UTILITY FUNCTIONS -------------------------------------------
-#---- box.cox.chord ---------------------------------------------------
+#----UTILITY FUNCTIONS -------------------------------------------
+#------------ box.cox.chord ---------------------------------------------------
 #' Compute the box.cox.chord transformation on quantitative community composition 
 #' data for any exponent. Usual exponents are larger than or equal to 0.
 #'
@@ -42,7 +42,7 @@ box.cox.chord <-
     res <- sweep(tmp, 1, row.norms, "/")
   }
 
-#---- BCD ---------------------------------------------------
+#------------ BCD ---------------------------------------------------
 #' Box-Cox transformation: find the best exponent to reach multivariate normality.
 #'
 #' Box-Cox-Dagnelie (BCD) method – Transform the data using different exponents. 
@@ -149,11 +149,132 @@ BCD <-
     res
   }
 
-#------------------ WORKFLOW FUNCTIONS -------------------------------------------
+#----WORKFLOW FUNCTIONS -------------------------------------------
 # in_sp_dt <- tar_read(rawdata_sp)
 # in_env_dt <- tar_read(rawdata_env)
 
-#--- format_spdata -------------
+#--------FORMAT data ---------------------------------------------------------------
+#------------ download basemap data -------
+#out_path <- file.path(resdir, 'basemap_data')
+#in_net <- tar_read(net_formatted)
+
+download_basemap <- function(out_path
+                             # , in_net
+) {
+  if (!dir.exists(out_path)) {
+    dir.create(out_path)
+  }
+  
+  #------- Download administrative boundaries----------------------------------
+  admin <- geodata::world(resolution=3, path=out_path)
+  
+  bolivia_boundaries <- admin[admin$NAME_0 == 'Bolivia']
+  
+  #------- Download low-res DEM for all of Bolivia -----------------------------
+  elev_bolivia <- geodata::elevation_30s(country='Bolivia',
+                                         path=file.path(out_path, 'strm'))
+  
+  
+  #------- Download high-res DEM for watershed ---------------------------------
+  #net_bbox <- ext(terra::project(x=vect(in_net), crs(elv_bolivia)))
+  # elev_tiles <- geodata::elevation_3s(lon=net_bbox[1:2], lat=net_bbox[3:4],
+  #                                     path = file.path(out_path, 'strm'))
+  
+  tile <- '23_16'
+  dem_path = file.path(out_path, paste0('srtm_', tile, '.zip'))
+  if (!file.exists(dem_path)) {
+    download.file(
+      paste0('https://srtm.csi.cgiar.org/wp-content/uploads/files/srtm_5x5/TIFF/srtm_',
+             tile, '.zip'), 
+      dem_path)
+  }
+  
+  elev_net <- unzip(dem_path, exdir = out_path) %>%
+    grep('.tif', ., value = T) %>%
+    terra::rast(.)
+  
+  # # tile_id_list <- c('23_14', '23_15', '23_16', '23_17',
+  # #          '24_14', '24_15', '24_16', '24_17',
+  # #          '25_16', '25_15', '25_16', '25_17')
+  # 
+  # elev_tiles <- lapply(tile_id_list, function(tile) {
+  #   print(tile)
+  #   dem_path = file.path(out_path, paste0('srtm_', tile, '.zip'))
+  #   if (!file.exists(dem_path)) {
+  #     download.file(
+  #       paste0('https://srtm.csi.cgiar.org/wp-content/uploads/files/srtm_5x5/TIFF/srtm_',
+  #              tile, '.zip'), 
+  #       dem_path)
+  #   }
+  #   
+  #   elev <- unzip(dem_path, exdir = out_path) %>%
+  #     grep('.tif', ., value = T) %>%
+  #     terra::rast(.)
+  #   
+  #   return(elev)
+  # })
+  # 
+  # #------- Mosaick and crop DEM  -----------------------------------------------
+  # #dem_out_path <- file.path(out_path, 'dem_bolivia')
+  # 
+  # elev_crop <- sprc(elev_tiles) %>%
+  #   merge %>%  
+  #   crop(ext(bolivia_boundaries) + 0.1) %>%
+  #   mask(bolivia_boundaries)
+  # 
+  # names(elev_crop) <- 'elevation'
+  # 
+  # out_elev_rast <- file.path(out_path, 'elev_crop.tif')
+  # writeRaster(elev_crop, out_elev_rast, overwrite = T)
+  # 
+  # #lc <- geodata::landcover('trees')
+  
+  #------- Function outputs ----------------------------------------------------
+  return(list(
+    admin = terra::serialize(admin, NULL),
+    elev_bolivia = terra::serialize(elev_bolivia, NULL),
+    elev_net = terra::serialize(elev_net, NULL)
+  ))
+}
+
+
+#------------ Create hillshade ---------------------------------------------------------
+create_hillshade <- function(in_dem, z_exponent, write=F, out_path) {
+  #From Dr. Dominic Royé - https://dominicroye.github.io/en/2022/hillshade-effects/
+  #terra::rast(in_basemaps$elev_path) %>%
+  elev <- in_dem %>%
+    terra::project("epsg:32720") %>%
+    .^(z_exponent)
+  
+  # estimate the slope
+  sl <- terra::terrain(elev, "slope", unit = "radians")
+  
+  # estimate the aspect or orientation
+  asp <- terra::terrain(elev, "aspect", unit = "radians")
+  
+  # pass multiple directions to shade()
+  hillmulti <- purrr::map(c(270, 15, 60, 330), function(dir){ 
+    shade(sl, asp, 
+          angle = 45, 
+          direction = dir,
+          normalize= TRUE)}
+  ) %>%
+    rast %>%
+    sum
+  
+  if (write) {
+    terra::writeRaster(hillmulti, out_path, overwrite = T)
+    return(
+      out_rast
+    )
+  } else {
+    return(serialize(hillmulti, NULL))
+  }
+  
+}
+
+
+#------------ format_spdata -------------
 format_spdata <- function(in_sp_dt) {
   skim(in_sp_dt)
   
@@ -178,7 +299,7 @@ format_spdata <- function(in_sp_dt) {
   
 }
 
-#--- format envdata -------------
+#------------ format envdata -------------
 format_envdata <- function(in_env_dt) {
   #skim(in_env_dt)
   
@@ -187,8 +308,8 @@ format_envdata <- function(in_env_dt) {
   
   in_env_dt[caudal %in% c(NA, 'SECO'), caudal := 0] %>% #Convert caudal/discharge to numeric
     .[, caudal := as.numeric(caudal)] %>%
-    setnames(c('estado de Flujo', 'Bloque'), 
-             c('estado_de_flujo', 'bloque')) %>%
+    setnames(c('estado de Flujo', 'Bloque', 'Roca'), 
+             c('estado_de_flujo', 'bloque', 'roca')) %>%
     .[, #Fill NAs by site for altura, pendiente, orden (height, slope, and stream order) 
       c('altura', 'pendiente', 'orden') := .SD[
         !is.na(altura),][1, list(altura, pendiente, orden)], 
@@ -202,11 +323,11 @@ format_envdata <- function(in_env_dt) {
       by=sitio]
   
   #No site with more than 100% for summed portions of bed sediment granularity
-  in_env_dt[, which(sum(c(bloque, piedra, grava, arena), na.rm=T) > 100),
+  in_env_dt[, which(sum(c(roca, bloque, piedra, grava, arena), na.rm=T) > 100),
             by=caso]
   
   #Did not record sediment when dry, so use average values from sites when flowing
-  sed_cols <- c('bloque', 'piedra', 'grava', 'arena')
+  sed_cols <- c('roca', 'bloque', 'piedra', 'grava', 'arena')
   in_env_dt[, 
             (sed_cols) :=
               sapply(.SD, simplify=F, function(x) {
@@ -218,7 +339,584 @@ format_envdata <- function(in_env_dt) {
   return(in_env_dt)
 }
 
-#--- plot_spdata -------------
+#------------ format_traitsdata ----------------
+#in_traits_rawdt <-  tar_read(traits_rawdt)
+
+format_traitsdata <- function(in_traits_rawdt) {
+  #Remove first row containing the different sub-categories of traits
+  traits_rawdt <- copy(in_traits_rawdt)[-1,]
+  
+  
+  #Concatenate trait name and values
+  setnames(traits_rawdt, 
+           c('taxon', paste(names(in_traits_rawdt)[-1], 
+                            in_traits_rawdt[1,-1],
+                            sep = '|')
+           )
+  )
+  
+  #Convert columns to numeric
+  traits_cols <- names(traits_rawdt)[-1]
+  traits_rawdt[, (traits_cols) := lapply(.SD, as.numeric), .SDcols = traits_cols]
+  
+  #Clean taxon names
+  traits_rawdt[, taxon := str_trim(tolower(taxon), side='both')]
+  
+  #Check that each category equates to 1
+  check <- melt(traits_rawdt, id.vars='taxon') %>%
+    .[, category := tstrsplit(variable, '[_][0-9][|]', keep = 1L)] %>%
+    .[, sum(as.numeric(value)), by=c('taxon', 'category')]
+  
+  return(traits_rawdt)
+}
+
+#------------ fix_net_dangles --------------
+fix_net_dangles <- function(in_net, in_tolerance, IDcol='OBJECTID_1') {
+  
+  if (inherits(in_net, 'character')) {
+    #Import segments for basin and project them using the projection of the points
+    net <- sf::st_read(in_net, quiet=T)
+  } else if (inherits(in_net, 'sf')) {
+    net <- in_net
+  }
+  
+  #Remove 0-length segments
+  net_sub <- net[!(as.numeric(st_length(net)) == 0),]
+  
+  
+  #Check disconnected reaches 
+  net_int <- sf::st_intersection(net_sub, net_sub)
+  
+  p_net <- ggplot() +
+    geom_sf(data = net)
+  
+  #Establish those to reconnect
+  IDcoldupli <- paste0(IDcol, '.1')
+  segments_to_correct <- net_sub[
+    !(net_sub[[IDcol]] %in% 
+        unique(
+          net_int[net_int[[IDcol]] !=net_int[[IDcoldupli]],][[IDcol]])
+    ),] 
+  
+  segments_to_snap_to <- net_sub[
+    (net_sub[[IDcol]] %in% 
+       unique(
+         net_int[net_int[[IDcol]] !=net_int[[IDcoldupli]],][[IDcol]])
+    ),] 
+  
+  #Correct network geometry by snapping the start and end points of all lines
+  #to correct to nearest line with a tolerance
+  #-- Get start and endpoints + join attributes back to the points
+  segments_to_correct_extremities <- st_line_sample(segments_to_correct, 
+                                                    sample=c(0,1))  %>%
+    st_cast("POINT") %>% #Convert from MULTIPOINT (including both start and end points) to POINT
+    cbind(
+      segments_to_correct[rep(seq_len(nrow(segments_to_correct)), each=2),], #join attributes
+      data.frame(pos = rep(c('start', 'end'), length(.)/2)) #add start and end attribute
+    ) %>%
+    .[,-(which(names(.) == 'geometry.1'))] #Remove LINESTRING attribute
+  
+  #Check segments to correct and their extremities
+  # p_net +
+  #   geom_sf(data=net_int) +
+  #   geom_sf(data=segments_to_correct, color='red') +
+  #   geom_sf(data = segments_to_correct_extremities, color='red')
+  
+  #Snap points
+  #first computing a line between site and snapping place on nearest segment
+  vect_extremities <- vect(segments_to_correct_extremities)
+  
+  sitesnap_l <- terra::nearest(vect_extremities,
+                               vect(segments_to_snap_to), 
+                               centroids = F, lines = T)
+  sitesnap_l[[IDcol]] <- segments_to_correct_extremities[[IDcol]]
+  sitesnap_l[['pos']] <- segments_to_correct_extremities[['pos']]
+  sitesnap_l[['snap_dist']] <- perim(sitesnap_l) #Compute snapping distance
+  
+  #convert the line to a point (the line's end point)
+  #Only keep snapped points that were moved within the snapping tolerance
+  snapped_extremities <- sitesnap_l[sitesnap_l$snap_dist < in_tolerance &
+                                      sitesnap_l$snap_dist > 0,] %>% 
+    terra::as.points(.) %>%
+    .[duplicated(paste0(.[[IDcol]][,1], .[['pos']][,1])),] 
+  
+  #Edit start and end vertices in network
+  net_sub_edit <- copy(net_sub)
+  
+  for (i in 1:nrow(net_sub[net_sub[[IDcol]] %in% 
+                           snapped_extremities[[IDcol]][,1], ])
+  ) {
+    line <- net_sub[net_sub[[IDcol]] %in% 
+                      snapped_extremities[[IDcol]][,1], ][i,]
+    #print(line[[IDcol]])
+    
+    new_node <- snapped_extremities[
+      snapped_extremities[[IDcol]][,1] == line[[IDcol]], ]
+    
+    if (new_node$pos == 'start') {
+      net_sub_edit[net_sub_edit[[IDcol]] %in% 
+                     snapped_extremities[[IDcol]][,1], ][i,]$geometry[[1]][1,] <-
+        as.vector(geom(new_node)[,c('x', 'y')])
+    } else if (new_node$pos == 'end') {
+      net_sub_edit[net_sub_edit[[IDcol]] %in% 
+                     snapped_extremities[[IDcol]][,1], ][i,]$geometry[[1]][nrow(line$geometry[[1]]),]  <-
+        as.vector(geom(new_node)[,c('x', 'y')])
+    }
+  }
+  
+  #Check intersections
+  net_sub_edit_int <- sf::st_intersection(net_sub_edit, net_sub_edit)
+  p_net +
+    geom_sf(data=net_sub_edit_int) +
+    geom_sf(data=segments_to_correct, color='red')
+  #st_write(net_sub_edit, file.path(resdir, 'check.shp'), append=F)
+  
+  return(net_sub_edit)
+}
+
+#------------ direct network ----------------------------------------------------------
+# in_net <- tar_read(net_formatted)
+# idcol <- 'OBJECTID_1'
+# outlet_id <- 245
+
+direct_network <- function(in_net,
+                           idcol,
+                           outlet_id
+) {
+  #------------------ Split lines at intersections -----------------------------
+  st_precision(in_net) <- 0.05 #Reduce precision to make up for imperfect geometry alignments
+  
+  #Remove artefacts in network
+  in_net <- in_net[in_net$length > 0.1 &
+                     in_net[[idcol]] != 73,] 
+  
+  #Get outlet
+  outlet_p <-  st_cast(in_net[in_net[[idcol]] == outlet_id,], "POINT") %>%
+    .[nrow(.),]
+  
+  sfnet <- as_sfnetwork(in_net) %>%
+    activate(edges) %>%
+    arrange(edge_length()) %>%
+    tidygraph::convert(to_spatial_simple) %>% #Remove loops
+    tidygraph::convert(to_spatial_smooth) %>% #Remove pseudo nodes (doesn't work well)
+    tidygraph::convert(to_spatial_subdivision) #Split at intersections
+  
+  net<- activate(sfnet, "edges") %>% #Grab edges
+    st_as_sf() 
+  net$newID <- seq_len(nrow(net)) #Create new IDs because of merging and resplitting
+  
+  st_precision(net) <- 0.05
+  
+  #Get newID for outlet
+  outlet_newID <- sf::st_intersection(net,
+                                      outlet_p)[['newID']]
+  
+  #------------------ Identify dangle points -----------------------------------
+  search_dangles <- function(in_network, idcol) {
+    if (nrow(in_network) > 1) {
+      #Get sfnetwork
+      sfnet <- as_sfnetwork(in_network) %>%
+        activate("edges") %>%
+        arrange(edge_length()) %>%
+        tidygraph::convert(to_spatial_subdivision) 
+      
+      edges <- activate(sfnet, "edges") %>%
+        st_as_sf()
+      nodes <- activate(sfnet, "nodes") %>%
+        st_as_sf()                                
+      
+      #Intersect nodes and edges
+      nodes_edges_inters <- sf::st_intersection(edges,
+                                                nodes) %>%
+        as.data.table
+      
+      #Identify nodes that intersect with only one edge (dangle points)
+      dangle_points <- nodes_edges_inters[
+        !(duplicated(nodes_edges_inters$.tidygraph_node_index) |
+            duplicated(nodes_edges_inters$.tidygraph_node_index, fromLast = T)),
+      ]
+      
+      #Plot network with dangle points
+      netp <- ggplot() +
+        geom_sf(data = edges, linewidth=1.2, color='blue') +
+        geom_sf(data=  st_as_sf(dangle_points))
+      
+      print(netp)
+      
+      #Return newID for dangle points
+      return(dangle_points[[idcol]])
+    } else {
+      return(NULL)
+    }
+  }
+  
+  #Set up loop that will iteratively identify dangle points, remove the associated
+  #lowest-order edges from network, then re-identify dangle points, removing the 
+  #associated lowest-order edges from network, and so on, iteratively, until
+  #only the outlet edge remains
+  
+  dangles <- 'go!'
+  order <- 1
+  net_list <- list() #List into which each subsequent set of edges will be written
+  
+  while (length(dangles) > 0) {
+    dangles <- search_dangles(in_network=net, idcol='newID') #identify dangle points
+    
+    dangle_segs_boolean <- (net[['newID']] %in% dangles &
+                              net[['newID']] != outlet_newID)
+    
+    net[dangle_segs_boolean, 'stream_order'] <- order #assign the associated edges a stream order
+    net_list[[order]] <-  net[dangle_segs_boolean,] #Write these edges to the list
+    net <- net[!(dangle_segs_boolean),] #Remove these edges from the network
+    order <- order + 1 
+    
+    net  <- as_sfnetwork(net) %>% 
+      activate(edges) %>%
+      arrange(edge_length()) %>%
+      tidygraph::convert(to_spatial_smooth) %>% #Re-dissolve edges
+      tidygraph::convert(to_spatial_simple) %>%
+      st_as_sf()
+    net$newID <- seq_len(nrow(net)) #Re-assign new IDs
+    
+    #Make sure the correct precision is set up so that even edges that don't perfectly match can be linked
+    st_precision(net) <- 0.05
+    
+    outlet_newID <- sf::st_intersection(net, #Re-dentify ID for outlet
+                                        outlet_p)[['newID']]
+    print(outlet_newID)
+    
+    write_sf(net[, c(idcol, 'newID')], #Write out intermediate network layer
+             file.path(resdir, paste0('check', order, '.shp')),
+             overwrite = T
+    )
+  }
+  #Add the outlet edge
+  net_list[[order]] <- net
+  net_list[[order]]$stream_order <- order
+  
+  #Create a single sf
+  out_net <- do.call(rbind, lapply(net_list, st_sf))
+  
+  return(out_net)
+}
+
+
+#------------ snap sites to nearest segment ---------------------------------------------
+# in_sites_point_path = tar_read(sites_shp_path)
+# in_sitesSQL=""
+# in_segments = tar_read(net_shp_path)
+# out_path = sites_snapped_out
+# proj = 'original'
+# pt_IDcol = 'C___DIGO_N'
+# nearby_ID = T
+# seg_IDcol = 'OBJECTID_1'
+# overwrite = F
+
+#Custom snap method. Lighter and faster than other tests options
+#sf::st_snap doesn't work
+#maptools::snapPointsToLines requires SpatialPoint and SpatialLines - too heavy/slow for this dataset
+#The option used here relies on terra::nearest, which is faster and returns only 
+# one line for each point compared to sf::st_nearest_points
+snap_sites <- function(in_sites_point_path, 
+                       in_sitesSQL="", 
+                       in_segments, 
+                       out_path,
+                       proj = 'custom', 
+                       pt_IDcol = NULL,
+                       nearby_ID = F,
+                       seg_IDcol = NULL,
+                       overwrite = F) {
+  
+  sitesp <- terra::vect(in_sites_point_path, query = in_sitesSQL)
+  
+  #Project sites 
+  # Global datasets tend to be in geographic coordinates. The unit of these 
+  # coordinates are decimal degrees, whose west-east length decreases
+  # with increasing latitude. Therefore, for identifying the nearest line,
+  # which is based on distance calculation, the point dataset needs to be 
+  # projected. However, no single projection is valid for the entire planet. 
+  # Consequently, for each basin, the sites are projected using a custom 
+  # projection which minimizes distortions for distance calculations within the
+  # sites' bounding box.
+  if (proj == 'custom') {
+    if (nrow(sitesp) > 1 & 
+        ((xmax(sitesp) != xmin(sitesp)) | (ymax(sitesp) != ymin(sitesp)))
+    ){
+      sitesp_proj <- terra::project(sitesp, 
+                                    dist_proj(sitesp))
+    } else {
+      #if only one site, project to UTM
+      sitesp_proj <- terra::project(
+        sitesp,
+        paste0('+proj=utm +zone=', 
+               floor((xmin(sitesp) + 180) / 6) + 1,
+               ' +datum=WGS84 +units=m +no_defs +ellps=WGS84')
+      )
+      
+    }
+  } else if (proj == 'original') {
+    sitesp_proj <- sitesp
+  } else if (inherits(proj, 'numeric')) {
+    sitesp_proj <- terra::project(sitesp, crs(paste0('EPSG:', proj)))
+  }
+  
+  #Import segments for basin
+  segs <- terra::vect(in_segments)
+  
+  
+  #Project them using the projection of the points
+  if (crs(segs) != crs(sitesp_proj)) {
+    segs <- terra::project(segs, crs(sitesp_proj))
+  }
+  
+  #Make sure extent is right (bug)
+  actual_segs_ext <- t(
+    as.data.table(geom(segs))[
+      , list(min(x, na.rm=T), max(x, na.rm=T),
+             min(y, na.rm=T), max(y, na.rm=T))])
+  segs <- crop(segs, actual_segs_ext)
+  
+  #Check that segment has unique IDs
+  if (sum(duplicated(segs[[seg_IDcol]])) > 0) {
+    seg_IDcol <- 'new_segID'
+    segs[[seg_IDcol]] <- seq_along(segs)
+  } 
+  
+  #Snap points (fastest way in R, it seems):
+  #first computing a line between site and snapping place on nearest segment
+  sitesnap_l <- terra::nearest(sitesp_proj, segs, centroids = F, lines = T)
+  sitesnap_l[[pt_IDcol]] <- sitesp_proj[[pt_IDcol]]
+  
+  #convert the line to a point (the line's end point)
+  sitesnap_p <- terra::as.points(sitesnap_l) %>%
+    .[duplicated(.[[pt_IDcol]]),]
+  
+  #Join ID of nearest line to that point
+  if (nearby_ID == T) {
+    sitesnap_p[[seg_IDcol]] <- terra::nearby(
+      sitesnap_p, segs, k=1)[, 'k1'] %>%
+      as.data.frame(segs)[., seg_IDcol] 
+  }
+  
+  #Reproject points to WGS84
+  if (proj == 'custom') {
+    sitesnap_p <- terra::project(sitesnap_p, "+proj=longlat +datum=WGS84")
+  }
+  
+  terra::writeVector(sitesnap_p,
+                     out_path,
+                     overwrite=overwrite)
+  
+  return(out_path)
+}
+
+#------------ compute geodesic distance -------------------------------------------------
+compute_eucdist <- function(in_sites_path, IDcol) {
+  sites <- terra::vect(in_sites_path)
+  distmat <- terra::distance(x=sites, y=sites)
+  rownames(distmat) <- colnames(distmat) <- sites[[IDcol]][[1]]
+  
+  return(list(
+    xy = geom(sites)[, c('x','y')],
+    distmat = distmat
+  ))
+}
+
+
+#------------ compute network distance --------------------------------------------------
+# in_sites_snapped <- tar_read(sites_snapped_path)
+# in_net <- tar_read(net_formatted)
+# IDcol <- sites_IDcol
+
+compute_netdist <- function(in_sites_snapped, 
+                            in_net,
+                            IDcol) {
+  #Import sites
+  if (inherits(in_sites_snapped, 'character')) {
+    #Import segments for basin and project them using the projection of the points
+    sites <- sf::st_read(in_sites_snapped, quiet=T)   
+  } else if (inherits(in_sites_snapped, 'sf')) {
+    sites <- in_sites_snapped
+  }
+  
+  #Slightly round coordinates to make sure that edges are connected
+  in_net <- sf::st_cast(in_net, "LINESTRING")
+  st_geometry(in_net) = st_geometry(in_net) %>%
+    lapply(function(x) round(x, 5)) %>%
+    sf::st_sfc(crs = st_crs(in_net))
+  
+  st_geometry(sites) = st_geometry(sites) %>%
+    lapply(function(x) round(x, 5)) %>%
+    sf::st_sfc(crs = st_crs(sites))
+  
+  #Format sfnetwork to compute distance matrix
+  sfnet <-in_net %>%
+    sfnetworks::as_sfnetwork(directed=F) %>% #Convert segments to sfnetwork
+    tidygraph::convert(to_spatial_simple) %>% #Remove pseudonodes
+    tidygraph::convert(to_spatial_smooth)  %>% #Remove loops
+    tidygraph::convert(to_spatial_subdivision) %>% #in sfnetwork, edges that aren’t connected at terminal nodes are considered disconnected. so deal with that
+    activate("edges") %>%
+    dplyr::mutate(length = edge_length())#Re-compute edge length
+  
+  #Compute distance matrix (keeping only segments downstream of sites)
+  dist_mat <- sfnetworks::st_network_blend(sfnet, sites) %>% #Append sites to sfnetwork
+    sfnetworks::st_network_cost(from = sites, #Compute network distances
+                                to = sites,
+                                weights = 'length')
+  
+  rownames(dist_mat) <- sites[[IDcol]]
+  colnames(dist_mat) <-sites[[IDcol]]
+  
+  #Check for dangles in sfnetwork topology
+  # open_ended_nodes <- sfnet %>%
+  #   activate("nodes") %>%
+  #   mutate(degree = centrality_degree()) %>%
+  #   st_as_sf() %>%
+  #   mutate(row = row_number()) %>%
+  #   filter(degree == 1)
+  # 
+  # disconnected_edges <- sfnet %>%
+  #   activate("edges") %>%
+  #   st_as_sf() %>%
+  #   filter(from %in% open_ended_nodes$row | to %in% open_ended_nodes$row)
+  # 
+  # mapview(sfnet %>% activate("edges") %>% st_as_sf(), layer.name="rail network") +
+  #   mapview(disconnected_edges, color="red", layer.name = "nodes with only 1 edge") +
+  #   mapview(open_ended_nodes, color="red", col.regions="red", layer.name = "edges of 1 edge nodes") +
+  #   mapview(sites, color='black', col.regions="black")
+  
+  return(dist_mat)
+}
+
+
+#------------ compute environmental distance--------------------------------------------
+# in_env_dt <- tar_read(env_dt)
+# IDcol = sites_IDcol
+
+compute_envdist <- function(in_env_dt, IDcol) {
+  #Isolate actual env attributes
+  envcols  <- c('AH_max', 'pH', 'conductivity_esp', 'oxigen_sat', 'TDS',
+                'AH_med', 'prof_med', 'veloc_med', 'altura', 'pendiente', 
+                'orden', 'caudal', 
+                'roca', 'bloque', 'piedra', 'grava', 'arena')
+  
+  #Transform data to normal distribution
+  in_env_dt[, `:=`(AH_max_sqrt = sqrt(AH_max),
+                   AH_med_sqrt = sqrt(AH_med),
+                   prof_med_sqrt = sqrt(prof_med),
+                   veloc_med_sqrt = sqrt(veloc_med),
+                   caudal_log10 = log10(caudal+0.01))]
+  envcols_edit <- plyr::mapvalues(envcols, 
+                                  c('AH_max', 'AH_med', 'prof_med', 
+                                    'veloc_med', 'caudal'),
+                                  c('AH_max_sqrt', 'AH_med_sqrt', 'prof_med_sqrt', 
+                                    'veloc_med_sqrt', 'caudal_log10')
+  )
+  
+  env_corr_plot <- ggcorrplot::ggcorrplot(
+    round(
+      cor(in_env_dt[, envcols_edit, with=F],
+          use='pairwise.complete.obs'), 
+      2)
+  )
+  
+  
+  #z-standardise data
+  env_dt_norm <- in_env_dt[, sapply(.SD, function(x) {
+    scale(x, center=T, scale=T)
+  }),
+  .SDcols = envcols_edit] %>%
+    as.data.table %>%
+    cbind(fecha=in_env_dt$fecha)
+  
+  #Check correlation plot
+  
+  #Compute Gower's distance
+  #With each category of variable weighted by 1
+  # Hydraulic variables (5 including 2 nearly indentical for AH):
+  #   'AH_max_sqrt', 'AH_med_sqrt' 
+  #   'prof_med_sqrt', 'veloc_med_sqrt', 'caudal_log10'
+  # Physiographic variables (3):
+  #   'altura', 'pendiente', 'orden'
+  # Physico-chem variables (4 including 2 nearly identical for conduct and TDS):
+  #   'pH', 'conductivity_esp', 'oxigen_sat', 'TDS'
+  # Sediments (5):
+  #   'roca', 'bloque', 'piedra', 'grava', 'arena'
+  
+  full_weights <- c(
+    1/8, #AH_max_sqrt
+    1/3, #pH
+    1/6, #conductivity_esp
+    1/3, #oxigen_sat
+    1/6, #TDS
+    1/8, #AH_med_sqrt
+    1/4, #prof_med_sqrt
+    1/4, #veloc_med_sqrt
+    1/3, #altura
+    1/3, #pendiente
+    1/3, #orden
+    1/4, #caudal_log10
+    1/5, #roca
+    1/5, #bloque
+    1/5, #piedra
+    1/5, #grava
+    1/5 #arena
+  )
+  
+  env_dist_weighted <- cluster::daisy(env_dt_norm[, envcols_edit, with=F], 
+                                      metric = 'gower',
+                                      weights = full_weights
+  )
+  
+  
+  partial_weights <- c(
+    1/2, #AH_max_sqrt
+    1, #pH
+    1/2, #conductivity_esp
+    1, #oxigen_sat
+    1/2, #TDS
+    1/2, #AH_med_sqrt
+    1, #prof_med_sqrt
+    1, #veloc_med_sqrt
+    1, #altura
+    1, #pendiente
+    1, #orden
+    1, #caudal_log10
+    1, #roca
+    1, #bloque
+    1, #piedra
+    1, #grava
+    1 #arena
+  )
+  
+  env_dist_unweighted <- cluster::daisy(env_dt_norm[, envcols_edit, with=F], 
+                                        metric = 'gower',
+                                        weights = partial_weights
+  )
+  
+  env_dist_weighted_byfecha <- lapply(unique(env_dt_norm$fecha), function(in_fecha) {
+    subdt <- env_dt_norm[fecha == in_fecha, -'fecha', with=F]
+    env_dist_weighted <- cluster::daisy(subdt, 
+                                        metric = 'gower',
+                                        weights = full_weights
+    )
+    return(env_dist_weighted)
+  })
+  names(env_dist_weighted_byfecha) <- unique(env_dt_norm$fecha)
+  
+  
+  return(list(
+    gow_dist_weighted = env_dist_weighted,
+    gow_dist_unweighted = env_dist_unweighted,
+    gow_dist_weighted_byfecha = env_dist_weighted_byfecha
+  ))
+}
+
+
+
+#-------- PLOT data ---------------------------------------------------------------
+
+#------------ plot_spdata -------------
 plot_spdata <- function(in_spenv_dt, in_sp_dt) {
   
   #Boxplots of abundance in each site by species
@@ -370,7 +1068,7 @@ plot_spdata <- function(in_spenv_dt, in_sp_dt) {
   ))
 }
 
-#--- plot_envdata -------------
+#------------ plot_envdata -------------
 plot_envdata <- function(in_env_dt) {
   in_env_dt[, estado_de_flujo := factor(
     estado_de_flujo, 
@@ -433,421 +1131,340 @@ plot_envdata <- function(in_env_dt) {
   ))
 }
 
-#--- fix_net_dangles --------------
-fix_net_dangles <- function(in_net, in_tolerance, IDcol='OBJECTID_1') {
+#------------ plot_traitsdata ---------------------------------------------------
+in_traits_dt <- tar_read(traits_dt)
+in_family_dt <- tar_read(family_rawdt)
+
+plot_traitsdata <- function(in_traits_dt,
+                            in_family_dt) {
+  traits_melt <- melt(in_traits_dt, id.vars='taxon') %>%
+    .[, c('trait', 'trait_value') := tstrsplit(variable, '[_][0-9][|]'),
+      by=c('taxon', 'variable')]
   
-  if (inherits(in_net, 'character')) {
-    #Import segments for basin and project them using the projection of the points
-    net <- sf::st_read(in_net, quiet=T)
-  } else if (inherits(in_net, 'sf')) {
-    net <- in_net
-  }
-  
-  #Remove 0-length segments
-  net_sub <- net[!(as.numeric(st_length(net)) == 0),]
-  
-  
-  #Check disconnected reaches 
-  net_int <- sf::st_intersection(net_sub, net_sub)
-  
-  p_net <- ggplot() +
-    geom_sf(data = net)
-  
-  #Establish those to reconnect
-  IDcoldupli <- paste0(IDcol, '.1')
-  segments_to_correct <- net_sub[
-    !(net_sub[[IDcol]] %in% 
-        unique(
-          net_int[net_int[[IDcol]] !=net_int[[IDcoldupli]],][[IDcol]])
-    ),] 
-  
-  segments_to_snap_to <- net_sub[
-    (net_sub[[IDcol]] %in% 
-       unique(
-         net_int[net_int[[IDcol]] !=net_int[[IDcoldupli]],][[IDcol]])
-    ),] 
-  
-  #Correct network geometry by snapping the start and end points of all lines
-  #to correct to nearest line with a tolerance
-  #-- Get start and endpoints + join attributes back to the points
-  segments_to_correct_extremities <- st_line_sample(segments_to_correct, 
-                                                    sample=c(0,1))  %>%
-    st_cast("POINT") %>% #Convert from MULTIPOINT (including both start and end points) to POINT
-    cbind(
-      segments_to_correct[rep(seq_len(nrow(segments_to_correct)), each=2),], #join attributes
-      data.frame(pos = rep(c('start', 'end'), length(.)/2)) #add start and end attribute
-    ) %>%
-    .[,-(which(names(.) == 'geometry.1'))] #Remove LINESTRING attribute
-  
-  #Check segments to correct and their extremities
-  # p_net +
-  #   geom_sf(data=net_int) +
-  #   geom_sf(data=segments_to_correct, color='red') +
-  #   geom_sf(data = segments_to_correct_extremities, color='red')
-  
-  #Snap points
-  #first computing a line between site and snapping place on nearest segment
-  vect_extremities <- vect(segments_to_correct_extremities)
-  
-  sitesnap_l <- terra::nearest(vect_extremities,
-                               vect(segments_to_snap_to), 
-                               centroids = F, lines = T)
-  sitesnap_l[[IDcol]] <- segments_to_correct_extremities[[IDcol]]
-  sitesnap_l[['pos']] <- segments_to_correct_extremities[['pos']]
-  sitesnap_l[['snap_dist']] <- perim(sitesnap_l) #Compute snapping distance
-  
-  #convert the line to a point (the line's end point)
-  #Only keep snapped points that were moved within the snapping tolerance
-  snapped_extremities <- sitesnap_l[sitesnap_l$snap_dist < in_tolerance &
-                                      sitesnap_l$snap_dist > 0,] %>% 
-    terra::as.points(.) %>%
-    .[duplicated(paste0(.[[IDcol]][,1], .[['pos']][,1])),] 
-  
-  #Edit start and end vertices in network
-  net_sub_edit <- copy(net_sub)
-  
-  for (i in 1:nrow(net_sub[net_sub[[IDcol]] %in% 
-                           snapped_extremities[[IDcol]][,1], ])
-  ) {
-    line <- net_sub[net_sub[[IDcol]] %in% 
-                      snapped_extremities[[IDcol]][,1], ][i,]
-    #print(line[[IDcol]])
+  traits_plot <- ggplot(traits_melt, aes(x=trait_value, y=value, fill=taxon)) +
+      geom_bar(stat = 'identity') +
+      scale_x_discrete(labels = function(x) {str_wrap(x, width=20)}) +
+      coord_flip() +
+      facet_wrap(~trait, scales = 'free') +
+      theme(legend.position = 'none')
     
-    new_node <- snapped_extremities[
-      snapped_extremities[[IDcol]][,1] == line[[IDcol]], ]
-    
-    if (new_node$pos == 'start') {
-      net_sub_edit[net_sub_edit[[IDcol]] %in% 
-                     snapped_extremities[[IDcol]][,1], ][i,]$geometry[[1]][1,] <-
-        as.vector(geom(new_node)[,c('x', 'y')])
-    } else if (new_node$pos == 'end') {
-      net_sub_edit[net_sub_edit[[IDcol]] %in% 
-                     snapped_extremities[[IDcol]][,1], ][i,]$geometry[[1]][nrow(line$geometry[[1]]),]  <-
-        as.vector(geom(new_node)[,c('x', 'y')])
-    }
-  }
+  return(traits_plot)
+}  
+#------------ map drying and richness --------------------------------------------------------------
+# in_spenv_dt = tar_read(spenv_dt)
+# in_net = tar_read(net_directed)
+# in_sites_path = tar_read(sites_path)
+
+map_data <- function(in_spenv_dt, 
+                     in_net,
+                     in_sites_path,
+                     sites_IDcol) {
   
-  #Check intersections
-  net_sub_edit_int <- sf::st_intersection(net_sub_edit, net_sub_edit)
-  p_net +
-    geom_sf(data=net_sub_edit_int) +
-    geom_sf(data=segments_to_correct, color='red')
-  #st_write(net_sub_edit, file.path(resdir, 'check.shp'), append=F)
+  sites_vect <- vect(in_sites_path) %>%
+    merge(in_spenv_dt, by.x = sites_IDcol, by.y = 'sitio')
   
-  return(net_sub_edit)
+  p_estado <- ggplot(data=sites_vect) +
+    geom_sf(data = in_net, aes(linewidth=stream_order), color='grey') +
+    scale_linewidth_continuous(range=c(0.5,1.7), guide = "none") +
+    scale_color_manual(values = c('#2988ad', '#fea534', '#ff6138'),
+                       labels = c('Flowing', 'Isolated pools', 'Dry bed')) +
+    geom_sf(aes(color=estado_de_flujo), size=2) +
+    geom_text(aes(label=format(fecha, '%b'), x= Inf, y = Inf),
+              hjust = 2, vjust = 3.3)+
+    facet_wrap(~fecha, labeller = function(x) format(x, '%b')) +
+    theme_void() +
+    theme(panel.spacing = unit(-2, "lines"),
+          strip.text = element_blank(),
+          legend.title = element_blank())
+  
+  p_rich <- ggplot(data=sites_vect) +
+    geom_sf(data = in_net, aes(linewidth=stream_order), color='grey') +
+    scale_linewidth_continuous(range=c(0.5,1.7), guide = "none") +
+    geom_sf(aes(color=alpha_div), size=2.5) +
+    scale_color_gradientn(name=str_wrap('taxonomic richness', 15),
+                          colours = viridis(256, direction=-1)) +
+    geom_text(aes(label=format(fecha, '%b'), x= Inf, y = Inf),
+              hjust = 2, vjust = 3.3) +
+    facet_wrap(~fecha, labeller = function(x) format(x, '%b')) +
+    theme_void()  +
+    theme(panel.spacing = unit(-2, "lines"),
+          strip.text = element_blank())
+  
+  p_abund <- ggplot(data=sites_vect) +
+    geom_sf(data = in_net, aes(linewidth=stream_order), color='grey') +
+    scale_linewidth_continuous(range=c(0.5,1.7), guide = "none") +
+    geom_sf(aes(color=total), size=2.5) +
+    scale_color_gradientn(name=str_wrap('Abundance', 15),
+                          colours = viridis(256, direction=-1)) +
+    geom_text(aes(label=format(fecha, '%b'), x= Inf, y = Inf),
+              hjust = 2, vjust = 3.3) +
+    facet_wrap(~fecha) +
+    theme_void()  +
+    theme(panel.spacing = unit(-2, "lines"),
+          strip.text = element_blank())
+  
+  return(list(
+    p_estado = p_estado,
+    p_rich = p_rich,
+    p_abund = p_abund
+  ))
 }
 
-#--- Snap sites to nearest segment ---------------------------------------------
-# in_sites_point_path = tar_read(sites_shp_path)
-# in_sitesSQL=""
-# in_segments = tar_read(net_shp_path)
-# out_path = sites_snapped_out
-# proj = 'original'
-# pt_IDcol = 'C___DIGO_N'
-# nearby_ID = T
-# seg_IDcol = 'OBJECTID_1'
-# overwrite = F
 
-#Custom snap method. Lighter and faster than other tests options
-#sf::st_snap doesn't work
-#maptools::snapPointsToLines requires SpatialPoint and SpatialLines - too heavy/slow for this dataset
-#The option used here relies on terra::nearest, which is faster and returns only 
-# one line for each point compared to sf::st_nearest_points
-snap_sites <- function(in_sites_point_path, 
-                       in_sitesSQL="", 
-                       in_segments, 
-                       out_path,
-                       proj = 'custom', 
-                       pt_IDcol = NULL,
-                       nearby_ID = F,
-                       seg_IDcol = NULL,
-                       overwrite = F) {
+#------------ map sites --------------------------------------------------------------
+# in_net = tar_read(net_directed)
+# in_sites_path = tar_read(sites_path)
+# in_basemaps <- tar_read(basemaps)
+# in_hillshade_bolivia <- tar_read(hillshade_bolivia)
+# in_hillshade_net <- tar_read(hillshade_net)
+
+map_caynaca <- function(in_spenv_dt, 
+                        in_net,
+                        in_sites_path,
+                        in_basemaps,
+                        in_hillshade_bolivia,
+                        in_hillshade_net,
+                        out_plot) {
+  #------------ Make watershed map ---------------------------------------------
+  netbbox <- ext(vect(in_net))
   
-  sitesp <- terra::vect(in_sites_point_path, query = in_sitesSQL)
+  elev_net <- unserialize(in_basemaps$elev_net) %>%
+    terra::project("epsg:32720") %>%
+    terra::crop(netbbox + 1000) 
   
-  #Project sites 
-  # Global datasets tend to be in geographic coordinates. The unit of these 
-  # coordinates are decimal degrees, whose west-east length decreases
-  # with increasing latitude. Therefore, for identifying the nearest line,
-  # which is based on distance calculation, the point dataset needs to be 
-  # projected. However, no single projection is valid for the entire planet. 
-  # Consequently, for each basin, the sites are projected using a custom 
-  # projection which minimizes distortions for distance calculations within the
-  # sites' bounding box.
-  if (proj == 'custom') {
-    if (nrow(sitesp) > 1 & 
-        ((xmax(sitesp) != xmin(sitesp)) | (ymax(sitesp) != ymin(sitesp)))
-    ){
-      sitesp_proj <- terra::project(sitesp, 
-                                    dist_proj(sitesp))
-    } else {
-      #if only one site, project to UTM
-      sitesp_proj <- terra::project(
-        sitesp,
-        paste0('+proj=utm +zone=', 
-               floor((xmin(sitesp) + 180) / 6) + 1,
-               ' +datum=WGS84 +units=m +no_defs +ellps=WGS84')
+  #Load and crop hillshade
+  hilldf_net <- unserialize(in_hillshade_net) %>%
+    terra::crop(netbbox + 1000) 
+  
+  #Format Hillshade map - https://dieghernan.github.io/202210_tidyterra-hillshade/
+  # normalize names
+  names(hilldf_net) <- "shades"
+  # Make palette
+  pal_greys <- hcl.colors(1000, "Grays")
+  # Use a vector of colors
+  index <- hilldf_net %>%
+    tidyterra::mutate(index_col = rescale(shades, to = c(1, length(pal_greys)))) %>%
+    tidyterra::mutate(index_col = round(index_col)) %>%
+    tidyterra::pull(index_col)
+  # Get cols
+  vector_cols <- pal_greys[index]
+  
+  axis_ext <- vect(in_net) %>%
+    project("EPSG:4326") %>%
+    ext() %>%
+    as.vector()
+  
+  br_y <- seq(axis_ext[3], axis_ext[4], length.out = 1000) %>%
+    pretty(n = 3) %>%
+    round(3) %>%
+    unique()
+  
+  br_x <- seq(axis_ext[1], axis_ext[2], length.out = 1000) %>%
+    pretty(n = 3) %>%
+    round(3) %>%
+    unique()
+  
+  hill_plot <- ggplot() +
+    geom_spatraster(
+      data = hilldf_net, fill = vector_cols, maxcell = Inf,
+      alpha = 0.6
+    ) +
+    scale_x_continuous(breaks=br_x, expand=c(0,0)) +
+    scale_y_continuous(breaks=br_y, expand=c(0,0))
+  
+  #Format full map
+  r_limits <- minmax(elev_net$srtm_23_16) %>% as.vector() 
+  r_limits <-  c(floor(r_limits[1] / 500), 
+                 ceiling(r_limits[2] / 500)) * 500 %>%
+    pmax(0)
+  
+  base_plot <- hill_plot +
+    # Avoid resampling with maxcell
+    geom_spatraster(data =  elev_net, maxcell = Inf) +
+    scale_fill_hypso_tint_c(
+      limits = r_limits,
+      palette = "etopo1_hypso",
+      alpha = 0.3,
+      labels = label_comma(),
+      # For the legend I use custom breaks
+      breaks = c(
+        seq(0, 500, 100),
+        seq(750, 1500, 250),
+        2000
       )
-      
-    }
-  } else if (proj == 'original') {
-    sitesp_proj <- sitesp
-  } else if (inherits(proj, 'numeric')) {
-    sitesp_proj <- terra::project(sitesp, crs(paste0('EPSG:', proj)))
-  }
-  
-  #Import segments for basin
-  segs <- terra::vect(in_segments)
-  
-  
-  #Project them using the projection of the points
-  if (crs(segs) != crs(sitesp_proj)) {
-    segs <- terra::project(segs, crs(sitesp_proj))
-  }
-  
-  #Make sure extent is right (bug)
-  actual_segs_ext <- t(
-    as.data.table(geom(segs))[
-      , list(min(x, na.rm=T), max(x, na.rm=T),
-             min(y, na.rm=T), max(y, na.rm=T))])
-  segs <- crop(segs, actual_segs_ext)
-  
-  #Check that segment has unique IDs
-  if (sum(duplicated(segs[[seg_IDcol]])) > 0) {
-    seg_IDcol <- 'new_segID'
-    segs[[seg_IDcol]] <- seq_along(segs)
-  } 
-  
-  #Snap points (fastest way in R, it seems):
-  #first computing a line between site and snapping place on nearest segment
-  sitesnap_l <- terra::nearest(sitesp_proj, segs, centroids = F, lines = T)
-  sitesnap_l[[pt_IDcol]] <- sitesp_proj[[pt_IDcol]]
-  
-  #convert the line to a point (the line's end point)
-  sitesnap_p <- terra::as.points(sitesnap_l) %>%
-    .[duplicated(.[[pt_IDcol]]),]
-  
-  #Join ID of nearest line to that point
-  if (nearby_ID == T) {
-    sitesnap_p[[seg_IDcol]] <- terra::nearby(
-      sitesnap_p, segs, k=1)[, 'k1'] %>%
-      as.data.frame(segs)[., seg_IDcol] 
-  }
-  
-  #Reproject points to WGS84
-  if (proj == 'custom') {
-    sitesnap_p <- terra::project(sitesnap_p, "+proj=longlat +datum=WGS84")
-  }
-  
-  terra::writeVector(sitesnap_p,
-                     out_path,
-                     overwrite=overwrite)
-  
-  return(out_path)
-}
-
-#--- Compute geodesic distance -------------------------------------------------
-compute_eucdist <- function(in_sites_path, IDcol) {
-  sites <- terra::vect(in_sites_path)
-  distmat <- terra::distance(x=sites, y=sites)
-  rownames(distmat) <- colnames(distmat) <- sites[[IDcol]][[1]]
-  
-  return(list(
-    xy = geom(sites)[, c('x','y')],
-    distmat = distmat
-  ))
-}
-
-
-#--- Compute network distance --------------------------------------------------
-# in_sites_snapped <- tar_read(sites_snapped_path)
-# in_net <- tar_read(net_formatted)
-# IDcol <- sites_IDcol
-
-compute_netdist <- function(in_sites_snapped, 
-                            in_net,
-                            IDcol) {
-  #Import sites
-  if (inherits(in_sites_snapped, 'character')) {
-    #Import segments for basin and project them using the projection of the points
-    sites <- sf::st_read(in_sites_snapped, quiet=T)   
-  } else if (inherits(in_sites_snapped, 'sf')) {
-    sites <- in_sites_snapped
-  }
-  
-  #Slightly round coordinates to make sure that edges are connected
-  in_net <- sf::st_cast(in_net, "LINESTRING")
-  st_geometry(in_net) = st_geometry(in_net) %>%
-    lapply(function(x) round(x, 5)) %>%
-    sf::st_sfc(crs = st_crs(in_net))
-  
-  st_geometry(sites) = st_geometry(sites) %>%
-    lapply(function(x) round(x, 5)) %>%
-    sf::st_sfc(crs = st_crs(sites))
-  
-  #Format sfnetwork to compute distance matrix
-  sfnet <-in_net %>%
-    sfnetworks::as_sfnetwork(directed=F) %>% #Convert segments to sfnetwork
-    tidygraph::convert(to_spatial_simple) %>% #Remove pseudonodes
-    tidygraph::convert(to_spatial_smooth)  %>% #Remove loops
-    tidygraph::convert(to_spatial_subdivision) %>% #in sfnetwork, edges that aren’t connected at terminal nodes are considered disconnected. so deal with that
-    activate("edges") %>%
-    dplyr::mutate(length = edge_length())#Re-compute edge length
-  
-  #Compute distance matrix (keeping only segments downstream of sites)
-  dist_mat <- sfnetworks::st_network_blend(sfnet, sites) %>% #Append sites to sfnetwork
-    sfnetworks::st_network_cost(from = sites, #Compute network distances
-                                to = sites,
-                                weights = 'length')
-  
-  rownames(dist_mat) <- sites[[IDcol]]
-  colnames(dist_mat) <-sites[[IDcol]]
-  
-  #Check for dangles in sfnetwork topology
-  # open_ended_nodes <- sfnet %>%
-  #   activate("nodes") %>%
-  #   mutate(degree = centrality_degree()) %>%
-  #   st_as_sf() %>%
-  #   mutate(row = row_number()) %>%
-  #   filter(degree == 1)
-  # 
-  # disconnected_edges <- sfnet %>%
-  #   activate("edges") %>%
-  #   st_as_sf() %>%
-  #   filter(from %in% open_ended_nodes$row | to %in% open_ended_nodes$row)
-  # 
-  # mapview(sfnet %>% activate("edges") %>% st_as_sf(), layer.name="rail network") +
-  #   mapview(disconnected_edges, color="red", layer.name = "nodes with only 1 edge") +
-  #   mapview(open_ended_nodes, color="red", col.regions="red", layer.name = "edges of 1 edge nodes") +
-  #   mapview(sites, color='black', col.regions="black")
-  
-  return(dist_mat)
-}
-
-
-#--- Compute environmental distance--------------------------------------------
-# in_env_dt <- tar_read(env_dt)
-# IDcol = sites_IDcol
-
-compute_envdist <- function(in_env_dt, IDcol) {
-  #Isolate actual env attributes
-  envcols  <- c('AH_max', 'pH', 'conductivity_esp', 'oxigen_sat', 'TDS',
-                'AH_med', 'prof_med', 'veloc_med', 'altura', 'pendiente', 
-                'orden', 'caudal', 'bloque', 'piedra', 'grava', 'arena')
-  
-  #Transform data to normal distribution
-  in_env_dt[, `:=`(AH_max_sqrt = sqrt(AH_max),
-                   AH_med_sqrt = sqrt(AH_med),
-                   prof_med_sqrt = sqrt(prof_med),
-                   veloc_med_sqrt = sqrt(veloc_med),
-                   caudal_log10 = log10(caudal+0.01))]
-  envcols_edit <- plyr::mapvalues(envcols, 
-                                  c('AH_max', 'AH_med', 'prof_med', 
-                                    'veloc_med', 'caudal'),
-                                  c('AH_max_sqrt', 'AH_med_sqrt', 'prof_med_sqrt', 
-                                    'veloc_med_sqrt', 'caudal_log10')
-  )
-  
-  env_corr_plot <- ggcorrplot::ggcorrplot(
-    round(
-      cor(in_env_dt[, envcols_edit, with=F],
-          use='pairwise.complete.obs'), 
-      2)
-  )
-  
-  
-  #z-standardise data
-  env_dt_norm <- in_env_dt[, sapply(.SD, function(x) {
-    scale(x, center=T, scale=T)
-  }),
-  .SDcols = envcols_edit] %>%
-    as.data.table %>%
-    cbind(fecha=in_env_dt$fecha)
-  
-  #Check correlation plot
-  
-  #Compute Gower's distance
-  #With each category of variable weighted by 1
-  # Hydraulic variables (5 including 2 nearly indentical for AH):
-  #   'AH_max_sqrt', 'AH_med_sqrt' 
-  #   'prof_med_sqrt', 'veloc_med_sqrt', 'caudal_log10'
-  # Physiographic variables (3):
-  #   'altura', 'pendiente', 'orden'
-  # Physico-chem variables (4 including 2 nearly identical for conduct and TDS):
-  #   'pH', 'conductivity_esp', 'oxigen_sat', 'TDS'
-  # Sediments (4):
-  #   'bloque', 'piedra', 'grava', 'arena'
-  
-  full_weights <- c(
-    1/8, #AH_max_sqrt
-    1/3, #pH
-    1/6, #conductivity_esp
-    1/3, #oxigen_sat
-    1/6, #TDS
-    1/8, #AH_med_sqrt
-    1/4, #prof_med_sqrt
-    1/4, #veloc_med_sqrt
-    1/3, #altura
-    1/3, #pendiente
-    1/3, #orden
-    1/4, #caudal_log10
-    1/4, #bloque
-    1/4, #piedra
-    1/4, #grava
-    1/4 #arena
-  )
-  
-  env_dist_weighted <- cluster::daisy(env_dt_norm[, envcols_edit, with=F], 
-                                      metric = 'gower',
-                                      weights = full_weights
-  )
-  
-  
-  partial_weights <- c(
-    1/2, #AH_max_sqrt
-    1, #pH
-    1/2, #conductivity_esp
-    1, #oxigen_sat
-    1/2, #TDS
-    1/2, #AH_med_sqrt
-    1, #prof_med_sqrt
-    1, #veloc_med_sqrt
-    1, #altura
-    1, #pendiente
-    1, #orden
-    1, #caudal_log10
-    1, #bloque
-    1, #piedra
-    1, #grava
-    1 #arena
-  )
-  
-  env_dist_unweighted <- cluster::daisy(env_dt_norm[, envcols_edit, with=F], 
-                                        metric = 'gower',
-                                        weights = partial_weights
-  )
-  
-  env_dist_weighted_byfecha <- lapply(unique(env_dt_norm$fecha), function(in_fecha) {
-    subdt <- env_dt_norm[fecha == in_fecha, -'fecha', with=F]
-    env_dist_weighted <- cluster::daisy(subdt, 
-                                        metric = 'gower',
-                                        weights = full_weights
     )
-    return(env_dist_weighted)
-  })
-  names(env_dist_weighted_byfecha) <- unique(env_dt_norm$fecha)
   
+  net_plot <- base_plot +
+    geom_sf(data = in_net, aes(linewidth=stream_order), color='blue') +
+    scale_linewidth_continuous(range=c(0.5,1.7)) +
+    geom_spatvector(data = vect(in_sites_path), 
+                    color='black',
+                    size = 1.75) +
+    theme_minimal() +
+    theme(legend.position = "none",
+          panel.grid = element_blank(),
+          panel.background = element_rect(color='white')) +
+    ggspatial::annotation_scale(location = "bl", width_hint = 0.4) +
+    ggspatial::annotation_north_arrow(location = "bl", which_north = "true", 
+                                      pad_x = unit(0.0, "in"), pad_y = unit(0.2, "in"),
+                                      style = north_arrow_fancy_orienteering)
   
-  return(list(
-    gow_dist_weighted = env_dist_weighted,
-    gow_dist_unweighted = env_dist_unweighted,
-    gow_dist_weighted_byfecha = env_dist_weighted_byfecha
-  ))
+  #------------ Make inset map -------------------------------------------------
+  admin <- unserialize(in_basemaps$admin)%>%
+    .[.$NAME_0 %in% c('Argentina', 'Chile', 'Brazil', 'Paraguay',
+                      'Peru', 'Bolivia')] %>%
+    terra::project("EPSG:4326")
+  
+  elev <- unserialize(in_basemaps$elev_bolivia) %>%
+    terra::project("EPSG:4326")
+  
+  #Load and crop hillshade
+  hilldf_bolivia <- unserialize(in_hillshade_bolivia) %>%
+    terra::project("EPSG:4326")
+  
+  #Format Hillshade map - https://dieghernan.github.io/202210_tidyterra-hillshade/
+  # normalize names
+  names(hilldf_bolivia) <- "shades"
+  # Make palette
+  # Use a vector of colors
+  index_bolivia <- hilldf_bolivia %>%
+    tidyterra::mutate(index_col = rescale(shades, to = c(1, length(pal_greys)))) %>%
+    tidyterra::mutate(index_col = round(index_col)) %>%
+    tidyterra::pull(index_col)
+  
+  # Get cols
+  vector_cols_bolivia <- pal_greys[index_bolivia]
+  
+  axis_ext_bolivia <- admin[admin$NAME_0 == 'Bolivia'] %>%
+    project("EPSG:4326") %>%
+    ext() %>%
+    as.vector()
+  
+  br_y_bolivia <- seq(axis_ext_bolivia[3], axis_ext_bolivia[4], 
+                      length.out = 1000) %>%
+    pretty(n = 3) %>%
+    round(3) %>%
+    unique()
+  
+  br_x_bolivia <- seq(axis_ext_bolivia[1], axis_ext_bolivia[2], 
+                      length.out = 1000) %>%
+    pretty(n = 3) %>%
+    round(3) %>%
+    unique()
+  
+  net_inset_rect <- as.polygons(netbbox,
+                                crs = "epsg:32720") %>%
+    project("EPSG:4326")
+  
+  admin_cropped <- crop(admin, ext(admin[admin$NAME_0 == 'Bolivia']))
+  
+  bolivia_plot <- ggplot() +
+    geom_spatvector(
+      data = admin_cropped,
+      fill = 'white'
+    ) + 
+    geom_spatraster(
+      data = hilldf_bolivia, fill = vector_cols_bolivia, maxcell = Inf,
+      alpha = 0.8
+    ) +
+    geom_sf_text(data = admin_cropped,
+                 aes(label = NAME_0),
+                 size=3) +
+    geom_sf(data = net_inset_rect, linewidth=1, color='black')  +
+    scale_x_continuous(breaks=br_x_bolivia, expand=c(0,0)) +
+    scale_y_continuous(breaks=br_y_bolivia, expand=c(0,0)) +
+    theme_minimal() +
+    theme(legend.position = "none",
+          panel.grid = element_blank(),
+          panel.background = element_rect(color='white'),
+          axis.title = element_blank())
+  
+  cbinded_plot <- (net_plot | bolivia_plot)
+  
+  ggsave(out_plot,
+         plot = cbinded_plot,
+         width = 8,
+         height = 5,
+         units = 'in',
+         dpi = 600)
+  
+  return(out_plot)
+  
 }
 
-#--- Compute spatial beta diversity for each date ---------------------------
+#-------- ANALYZE data ---------------------------------------------------------------
+
+#------------ compute functional biodiversity indices -----------------------------------
+# in_traits_dt <- tar_read(traits_dt)
+# in_family_dt <- tar_read(family_rawdt)
+
+compute_functional_bioindices <- function(in_traits_dt,
+                                          in_family_dt) {
+  taxacols <- names(
+    which(sapply(
+      in_family_dt[, -c('presencia', 'fecha', 'sitio', 'total')], 
+      is.numeric))
+  )
+  
+  #Make sure that all families have trait data
+  taxacols[!taxacols %in% in_traits_dt$taxon]
+  in_traits_dt$taxon[!in_traits_dt$taxon %in% taxacols]
+  
+  #Make sure that taxa are identically ordered
+  all(order(in_traits_dt$taxon) == order(taxacols))
+
+  #Compute functional richness based on trait probability density
+  
+  trait_distribution_format <- melt(in_traits_dt, id.vars = 'taxon') %>%
+    .[, c('trait', 'trait_value') := tstrsplit(variable, '[_][0-9][|]'),
+      by=c('taxon', 'variable')] %>%
+    .[, dummy_trait_modality := as.numeric(factor(trait_value, 
+                                                  levels=unique(trait_value))), 
+      by=trait] %>%
+    .[, trait_freq_100k:= round(value*100000)] 
+  
+  pseudo_sampling_format <- melt(in_family_dt, 
+                                 id.vars = c('fecha', 'sitio'),
+                                 measure.vars = taxacols,
+                                 variable.name = 'taxon',
+                                 value.name = 'relative_abundance'
+  ) %>%
+    .[relative_abundance > 0, 
+      merge(.SD, 
+            trait_distribution_format[trait_freq_100k>0,], 
+            by='taxon'),
+      by = c('sitio', 'fecha')] %>%
+    .[, pseudo_n := ceiling(relative_abundance*trait_freq_100k)] %>%
+    .[,
+      c('trait', 'dummy_trait_modality',
+        'sitio', 'fecha', 'taxon', 'pseudo_n'),
+      with=F] %>%
+    .[, i := .I]
+  
+  pseudo_samples <- dcast(pseudo_sampling_format,
+                          sitio + fecha + taxon + pseudo_n + i ~ trait,
+                          value.var = 'dummy_trait_modality')
+  
+  pseudo_sampling_format[, rep(.I, pseudo_n)] 
+  
+  
+
+  
+    
+  
+  
+  data(iris)
+  traits_iris <- iris[, c("Sepal.Length", "Sepal.Width")]
+  sp_iris <- iris$Species
+  TPDs_iris <- TPD::TPDs(species = sp_iris, traits_iris)
+  
+
+}
+
+
+#------------ compute taxonomic spatial beta diversity for each date --------------------
 #in_sp_dt <- tar_read(sp_dt)
-compute_spatial_beta <- function(in_sp_dt) {
+compute_spatial_taxo_beta <- function(in_sp_dt) {
   #----- Prepare data ----------------------------------------------------------
   #Shroeder and Jenkins for choice of indices
   #Add some based on Anderson et al. 2011
@@ -1039,175 +1656,10 @@ compute_spatial_beta <- function(in_sp_dt) {
     pca_chord_dt = pca_chord_dt
   ))
 } 
-#--- Plot spatial beta div --------------------------------------------------
-#in_spatial_beta <- tar_read(spatial_beta)
-
-plot_spatial_beta <- function(in_spatial_beta) {
-  
-  #Plot beta diversity and its components over time based on pres-abs Jaccard
-  beta_jaccard_melt <- in_spatial_beta$beta_jaccard_dt %>%
-    melt(id.vars='fecha') %>%
-    .[variable %in% c('BDtotal', 'Repl', 'RichDif'),]
-  
-  plot_beta_jaccard_fecha <- ggplot() +
-    geom_area(data = beta_jaccard_melt[variable != 'BDtotal'],
-              aes(x=fecha, y=value, 
-                  fill=variable, group=variable)) +
-    geom_line(data = beta_jaccard_melt[variable == 'BDtotal'],
-              aes(x=fecha, y=value, group=variable, color=variable),
-              linewidth=1) + 
-    scale_color_manual(values ='black',
-                       labels = 'Total beta diversity') +
-    scale_fill_discrete(labels=c('Replacement', 'Richness difference')) +
-    scale_x_datetime(name = 'Date', 
-                     breaks = '2 months',
-                     labels = date_format("%b")) +
-    scale_y_continuous(limits=c(0,0.5), 
-                       name='Value') +
-    coord_cartesian(expand=F) +
-    theme_classic() + 
-    theme(legend.title = element_blank())
-  
-  # #Plot beta diversity and its components over time based on abundance Bray-Curtis
-  # beta_bray_melt <- in_spatial_beta$beta_bray %>%
-  #   melt(id.vars='fecha')
-  # 
-  # plot_beta_bray_fecha <- ggplot() +
-  #   geom_area(data = beta_bray_melt[variable != 'BDtotal'],
-  #             aes(x=fecha, y=100*value, 
-  #                 position = 'stack',
-  #                 fill=variable, group=variable)) +
-  #   geom_line(data = beta_bray_melt[variable == 'BDtotal'],
-  #             aes(x=fecha, y=100*value, group=variable, color=variable),
-  #             size=1) + 
-  #   scale_color_manual(values ='black',
-  #                      labels = 'Total beta diversity') +
-  #   scale_fill_discrete(labels=c('Replacement',
-  #                                'Richness difference')) +
-  #   scale_x_discrete(name='Date') +
-  #   scale_y_continuous(limits=c(0,100), 
-  #                      name='Value') +
-  #   coord_cartesian(expand=F) +
-  #   theme_classic() + 
-  #   theme(legend.title = element_blank())
-  
-  #Plot beta diversity and its components over time based on abundance Ruzicka
-  beta_ruzicka_melt <- in_spatial_beta$beta_ruzicka_dt %>%
-    melt(id.vars='fecha') %>%
-    .[variable %in% c('BDtotal', 'Repl', 'RichDif'),]
-  
-  plot_beta_ruzicka_fecha <- ggplot() +
-    geom_area(data = beta_ruzicka_melt[variable != 'BDtotal'],
-              aes(x=fecha, y=value,
-                  fill=variable, group=variable)) +
-    geom_line(data = beta_ruzicka_melt[variable == 'BDtotal'],
-              aes(x=fecha, y=value, group=variable, color=variable),
-              size=1) +
-    scale_color_manual(values ='black',
-                       labels = 'Total beta diversity') +
-    scale_fill_discrete(labels=c('Replacement',
-                                 'Richness difference')) +
-    scale_x_datetime(name = 'Date', 
-                     breaks = '2 months',
-                     labels = date_format("%b")) +
-    scale_y_continuous(limits=c(0,0.5),
-                       name='Value') +
-    coord_cartesian(expand=F) +
-    theme_classic() +
-    theme(legend.title = element_blank())
-  
-  #Plot beta diversity and its components over time based on abundance Ruzicka (after transforming data)
-  beta_ruzicka_trans_melt <- in_spatial_beta$beta_ruzicka_trans_dt %>%
-    melt(id.vars='fecha') %>%
-    .[variable %in% c('BDtotal', 'Repl', 'RichDif'),]
-  
-  plot_beta_ruzicka_trans_fecha <- ggplot() +
-    geom_area(data = beta_ruzicka_trans_melt[variable != 'BDtotal'],
-              aes(x=fecha, y=value,
-                  fill=variable, group=variable)) +
-    geom_line(data = beta_ruzicka_trans_melt[variable == 'BDtotal'],
-              aes(x=fecha, y=value, group=variable, color=variable),
-              size=1) +
-    scale_color_manual(values ='black',
-                       labels = 'Total beta diversity') +
-    scale_fill_discrete(labels=c('Replacement',
-                                 'Richness difference')) +
-    scale_x_datetime(name = 'Date', 
-                     breaks = '2 months',
-                     labels = date_format("%b")) +
-    scale_y_continuous(limits=c(0,0.5),
-                       name='Value') +
-    coord_cartesian(expand=F) +
-    theme_classic() +
-    theme(legend.title = element_blank())
-  
-  #Plot trajectories
-  #nMDS for Bray-Curtis
-  # ggplot(data=in_spatial_beta$nmds_bray_dt[intermitencia=='isolpool',],
-  #        aes(x=MDS1, y=MDS2, color=estado_de_flujo)) +
-  #   geom_point() +
-  #   geom_line(aes(group=sitio))
-  
-  nMDS_dt_forplot <- in_spatial_beta$nmds_bray_dt %>%
-    merge(
-      setnames(
-        expand.grid(unique(.$fecha),
-                    unique(.$sitio)),
-        c('fecha', 'sitio')
-      ),
-      by=c('fecha', 'sitio'),
-      all.y=T
-    ) %>%
-    .[, `:=`(MDS1_lag = lag(MDS1),
-             MDS2_lag = lag(MDS2),
-             estado_de_flujo_lag = lag(estado_de_flujo)),
-      by=sitio]
-  
-  plot_nmds_time <- ggplot() +
-    geom_point(data= nMDS_dt_forplot,
-               aes(x = MDS1_lag, y = MDS2_lag, 
-                   shape=estado_de_flujo_lag),
-               color = 'grey',
-               size=4, alpha=0.5) +
-    geom_point(data = nMDS_dt_forplot[is.na(MDS1),],
-               aes(x = MDS1_lag, y = MDS2_lag, 
-                   shape=estado_de_flujo_lag),
-               color = 'black',
-               size=4, alpha=0.4) +
-    geom_segment(data= nMDS_dt_forplot,
-                 aes(x=MDS1_lag, xend=MDS1,
-                     y=MDS2_lag, yend=MDS2),
-                 color = 'grey', alpha=0.5) +
-    geom_point(data= nMDS_dt_forplot,
-               aes(x = MDS1, y = MDS2, 
-                   shape=estado_de_flujo, color=intermitencia),
-               size=4, alpha=0.85) +
-    scale_shape_discrete(name='Flow state at time step',
-                         labels = c('Flowing',
-                                    'Disconnected pools',
-                                    'Dry channel (not displayed)')) +
-    scale_color_manual(name='Long-term flow regime',
-                       values = c('#2988ad', '#fea534', '#ff6138'), #c('#d73027', '#fee090', '#4575b4', '#ffffff'),
-                       labels = c('Intermittent: dry channel',
-                                  'Intermittent: disconnected pools',
-                                  'Perennial',
-                                  'Previous sampling date')) +
-    scale_x_continuous(name = 'MDS1') +
-    scale_y_continuous(name = 'MDS2') + 
-    coord_fixed() +
-    facet_wrap(~fecha, labeller= function(x) format(x, '%b')) +
-    theme_classic()
-  
-  return(list(
-    plot_beta_jaccard_fecha = plot_beta_jaccard_fecha,
-    plot_beta_ruzicka_fecha = plot_beta_ruzicka_fecha,
-    plot_beta_ruzicka_trans_fecha = plot_beta_ruzicka_trans_fecha,
-    plot_nmds_time = plot_nmds_time
-  ))
-}
+#------------ compute functional spatial beta diversity for each date -------------------
 
 
-#--- Compute mantel test -----------------------------------------------------
+#------------ compute mantel test -----------------------------------------------------
 # in_spenv_dt = tar_read(spenv_dt)
 # in_spatial_beta = tar_read(spatial_beta)
 # in_env_dist = tar_read(env_dist)
@@ -1545,7 +1997,176 @@ compute_mantel <- function(
   return(mantel_dt)
 }
 
-#--- Plot Mantel tests results ----------------------------------------------
+#-------- PLOT analysis
+#------------ plot spatial beta div --------------------------------------------------
+#in_spatial_beta <- tar_read(spatial_beta)
+
+plot_spatial_beta <- function(in_spatial_beta) {
+  
+  #Plot beta diversity and its components over time based on pres-abs Jaccard
+  beta_jaccard_melt <- in_spatial_beta$beta_jaccard_dt %>%
+    melt(id.vars='fecha') %>%
+    .[variable %in% c('BDtotal', 'Repl', 'RichDif'),]
+  
+  plot_beta_jaccard_fecha <- ggplot() +
+    geom_area(data = beta_jaccard_melt[variable != 'BDtotal'],
+              aes(x=fecha, y=value, 
+                  fill=variable, group=variable)) +
+    geom_line(data = beta_jaccard_melt[variable == 'BDtotal'],
+              aes(x=fecha, y=value, group=variable, color=variable),
+              linewidth=1) + 
+    scale_color_manual(values ='black',
+                       labels = 'Total beta diversity') +
+    scale_fill_discrete(labels=c('Replacement', 'Richness difference')) +
+    scale_x_datetime(name = 'Date', 
+                     breaks = '2 months',
+                     labels = date_format("%b")) +
+    scale_y_continuous(limits=c(0,0.5), 
+                       name='Value') +
+    coord_cartesian(expand=F) +
+    theme_classic() + 
+    theme(legend.title = element_blank())
+  
+  # #Plot beta diversity and its components over time based on abundance Bray-Curtis
+  # beta_bray_melt <- in_spatial_beta$beta_bray %>%
+  #   melt(id.vars='fecha')
+  # 
+  # plot_beta_bray_fecha <- ggplot() +
+  #   geom_area(data = beta_bray_melt[variable != 'BDtotal'],
+  #             aes(x=fecha, y=100*value, 
+  #                 position = 'stack',
+  #                 fill=variable, group=variable)) +
+  #   geom_line(data = beta_bray_melt[variable == 'BDtotal'],
+  #             aes(x=fecha, y=100*value, group=variable, color=variable),
+  #             size=1) + 
+  #   scale_color_manual(values ='black',
+  #                      labels = 'Total beta diversity') +
+  #   scale_fill_discrete(labels=c('Replacement',
+  #                                'Richness difference')) +
+  #   scale_x_discrete(name='Date') +
+  #   scale_y_continuous(limits=c(0,100), 
+  #                      name='Value') +
+  #   coord_cartesian(expand=F) +
+  #   theme_classic() + 
+  #   theme(legend.title = element_blank())
+  
+  #Plot beta diversity and its components over time based on abundance Ruzicka
+  beta_ruzicka_melt <- in_spatial_beta$beta_ruzicka_dt %>%
+    melt(id.vars='fecha') %>%
+    .[variable %in% c('BDtotal', 'Repl', 'RichDif'),]
+  
+  plot_beta_ruzicka_fecha <- ggplot() +
+    geom_area(data = beta_ruzicka_melt[variable != 'BDtotal'],
+              aes(x=fecha, y=value,
+                  fill=variable, group=variable)) +
+    geom_line(data = beta_ruzicka_melt[variable == 'BDtotal'],
+              aes(x=fecha, y=value, group=variable, color=variable),
+              size=1) +
+    scale_color_manual(values ='black',
+                       labels = 'Total beta diversity') +
+    scale_fill_discrete(labels=c('Replacement',
+                                 'Richness difference')) +
+    scale_x_datetime(name = 'Date', 
+                     breaks = '2 months',
+                     labels = date_format("%b")) +
+    scale_y_continuous(limits=c(0,0.5),
+                       name='Value') +
+    coord_cartesian(expand=F) +
+    theme_classic() +
+    theme(legend.title = element_blank())
+  
+  #Plot beta diversity and its components over time based on abundance Ruzicka (after transforming data)
+  beta_ruzicka_trans_melt <- in_spatial_beta$beta_ruzicka_trans_dt %>%
+    melt(id.vars='fecha') %>%
+    .[variable %in% c('BDtotal', 'Repl', 'RichDif'),]
+  
+  plot_beta_ruzicka_trans_fecha <- ggplot() +
+    geom_area(data = beta_ruzicka_trans_melt[variable != 'BDtotal'],
+              aes(x=fecha, y=value,
+                  fill=variable, group=variable)) +
+    geom_line(data = beta_ruzicka_trans_melt[variable == 'BDtotal'],
+              aes(x=fecha, y=value, group=variable, color=variable),
+              size=1) +
+    scale_color_manual(values ='black',
+                       labels = 'Total beta diversity') +
+    scale_fill_discrete(labels=c('Replacement',
+                                 'Richness difference')) +
+    scale_x_datetime(name = 'Date', 
+                     breaks = '2 months',
+                     labels = date_format("%b")) +
+    scale_y_continuous(limits=c(0,0.5),
+                       name='Value') +
+    coord_cartesian(expand=F) +
+    theme_classic() +
+    theme(legend.title = element_blank())
+  
+  #Plot trajectories
+  #nMDS for Bray-Curtis
+  # ggplot(data=in_spatial_beta$nmds_bray_dt[intermitencia=='isolpool',],
+  #        aes(x=MDS1, y=MDS2, color=estado_de_flujo)) +
+  #   geom_point() +
+  #   geom_line(aes(group=sitio))
+  
+  nMDS_dt_forplot <- in_spatial_beta$nmds_bray_dt %>%
+    merge(
+      setnames(
+        expand.grid(unique(.$fecha),
+                    unique(.$sitio)),
+        c('fecha', 'sitio')
+      ),
+      by=c('fecha', 'sitio'),
+      all.y=T
+    ) %>%
+    .[, `:=`(MDS1_lag = lag(MDS1),
+             MDS2_lag = lag(MDS2),
+             estado_de_flujo_lag = lag(estado_de_flujo)),
+      by=sitio]
+  
+  plot_nmds_time <- ggplot() +
+    geom_point(data= nMDS_dt_forplot,
+               aes(x = MDS1_lag, y = MDS2_lag, 
+                   shape=estado_de_flujo_lag),
+               color = 'grey',
+               size=4, alpha=0.5) +
+    geom_point(data = nMDS_dt_forplot[is.na(MDS1),],
+               aes(x = MDS1_lag, y = MDS2_lag, 
+                   shape=estado_de_flujo_lag),
+               color = 'black',
+               size=4, alpha=0.4) +
+    geom_segment(data= nMDS_dt_forplot,
+                 aes(x=MDS1_lag, xend=MDS1,
+                     y=MDS2_lag, yend=MDS2),
+                 color = 'grey', alpha=0.5) +
+    geom_point(data= nMDS_dt_forplot,
+               aes(x = MDS1, y = MDS2, 
+                   shape=estado_de_flujo, color=intermitencia),
+               size=4, alpha=0.85) +
+    scale_shape_discrete(name='Flow state at time step',
+                         labels = c('Flowing',
+                                    'Disconnected pools',
+                                    'Dry channel (not displayed)')) +
+    scale_color_manual(name='Long-term flow regime',
+                       values = c('#2988ad', '#fea534', '#ff6138'), #c('#d73027', '#fee090', '#4575b4', '#ffffff'),
+                       labels = c('Intermittent: dry channel',
+                                  'Intermittent: disconnected pools',
+                                  'Perennial',
+                                  'Previous sampling date')) +
+    scale_x_continuous(name = 'MDS1') +
+    scale_y_continuous(name = 'MDS2') + 
+    coord_fixed() +
+    facet_wrap(~fecha, labeller= function(x) format(x, '%b')) +
+    theme_classic()
+  
+  return(list(
+    plot_beta_jaccard_fecha = plot_beta_jaccard_fecha,
+    plot_beta_ruzicka_fecha = plot_beta_ruzicka_fecha,
+    plot_beta_ruzicka_trans_fecha = plot_beta_ruzicka_trans_fecha,
+    plot_nmds_time = plot_nmds_time
+  ))
+}
+
+
+#------------ plot Mantel tests results ----------------------------------------------
 #in_mantel_test_list <- tar_read(mantel_test_list)
 
 plot_mantel_tests <- function(in_mantel_dt) {
@@ -1585,490 +2206,7 @@ plot_mantel_tests <- function(in_mantel_dt) {
   
 }
 
-#---- direct network ----------------------------------------------------------
-# in_net <- tar_read(net_formatted)
-# idcol <- 'OBJECTID_1'
-# outlet_id <- 245
-
-direct_network <- function(in_net,
-                           idcol,
-                           outlet_id
-) {
-  #------------------ Split lines at intersections -----------------------------
-  st_precision(in_net) <- 0.05 #Reduce precision to make up for imperfect geometry alignments
-  
-  #Remove artefacts in network
-  in_net <- in_net[in_net$length > 0.1 &
-                     in_net[[idcol]] != 73,] 
-  
-  #Get outlet
-  outlet_p <-  st_cast(in_net[in_net[[idcol]] == outlet_id,], "POINT") %>%
-    .[nrow(.),]
-  
-  sfnet <- as_sfnetwork(in_net) %>%
-    activate(edges) %>%
-    arrange(edge_length()) %>%
-    tidygraph::convert(to_spatial_simple) %>% #Remove loops
-    tidygraph::convert(to_spatial_smooth) %>% #Remove pseudo nodes (doesn't work well)
-    tidygraph::convert(to_spatial_subdivision) #Split at intersections
-  
-  net<- activate(sfnet, "edges") %>% #Grab edges
-    st_as_sf() 
-  net$newID <- seq_len(nrow(net)) #Create new IDs because of merging and resplitting
-  
-  st_precision(net) <- 0.05
-  
-  #Get newID for outlet
-  outlet_newID <- sf::st_intersection(net,
-                                      outlet_p)[['newID']]
-  
-  #------------------ Identify dangle points -----------------------------------
-  search_dangles <- function(in_network, idcol) {
-    if (nrow(in_network) > 1) {
-      #Get sfnetwork
-      sfnet <- as_sfnetwork(in_network) %>%
-        activate("edges") %>%
-        arrange(edge_length()) %>%
-        tidygraph::convert(to_spatial_subdivision) 
-      
-      edges <- activate(sfnet, "edges") %>%
-        st_as_sf()
-      nodes <- activate(sfnet, "nodes") %>%
-        st_as_sf()                                
-      
-      #Intersect nodes and edges
-      nodes_edges_inters <- sf::st_intersection(edges,
-                                                nodes) %>%
-        as.data.table
-      
-      #Identify nodes that intersect with only one edge (dangle points)
-      dangle_points <- nodes_edges_inters[
-        !(duplicated(nodes_edges_inters$.tidygraph_node_index) |
-            duplicated(nodes_edges_inters$.tidygraph_node_index, fromLast = T)),
-      ]
-      
-      #Plot network with dangle points
-      netp <- ggplot() +
-        geom_sf(data = edges, linewidth=1.2, color='blue') +
-        geom_sf(data=  st_as_sf(dangle_points))
-      
-      print(netp)
-      
-      #Return newID for dangle points
-      return(dangle_points[[idcol]])
-    } else {
-      return(NULL)
-    }
-  }
-  
-  #Set up loop that will iteratively identify dangle points, remove the associated
-  #lowest-order edges from network, then re-identify dangle points, removing the 
-  #associated lowest-order edges from network, and so on, iteratively, until
-  #only the outlet edge remains
-  
-  dangles <- 'go!'
-  order <- 1
-  net_list <- list() #List into which each subsequent set of edges will be written
-  
-  while (length(dangles) > 0) {
-    dangles <- search_dangles(in_network=net, idcol='newID') #identify dangle points
-    
-    dangle_segs_boolean <- (net[['newID']] %in% dangles &
-                              net[['newID']] != outlet_newID)
-    
-    net[dangle_segs_boolean, 'stream_order'] <- order #assign the associated edges a stream order
-    net_list[[order]] <-  net[dangle_segs_boolean,] #Write these edges to the list
-    net <- net[!(dangle_segs_boolean),] #Remove these edges from the network
-    order <- order + 1 
-    
-    net  <- as_sfnetwork(net) %>% 
-      activate(edges) %>%
-      arrange(edge_length()) %>%
-      tidygraph::convert(to_spatial_smooth) %>% #Re-dissolve edges
-      tidygraph::convert(to_spatial_simple) %>%
-      st_as_sf()
-    net$newID <- seq_len(nrow(net)) #Re-assign new IDs
-    
-    #Make sure the correct precision is set up so that even edges that don't perfectly match can be linked
-    st_precision(net) <- 0.05
-    
-    outlet_newID <- sf::st_intersection(net, #Re-dentify ID for outlet
-                                        outlet_p)[['newID']]
-    print(outlet_newID)
-    
-    write_sf(net[, c(idcol, 'newID')], #Write out intermediate network layer
-             file.path(resdir, paste0('check', order, '.shp')),
-             overwrite = T
-    )
-  }
-  #Add the outlet edge
-  net_list[[order]] <- net
-  net_list[[order]]$stream_order <- order
-  
-  #Create a single sf
-  out_net <- do.call(rbind, lapply(net_list, st_sf))
-  
-  return(out_net)
-}
 
 
-#--- Download basemap data -------
-#out_path <- file.path(resdir, 'basemap_data')
-#in_net <- tar_read(net_formatted)
-
-download_basemap <- function(out_path
-                             # , in_net
-) {
-  if (!dir.exists(out_path)) {
-    dir.create(out_path)
-  }
-  
-  #------- Download administrative boundaries----------------------------------
-  admin <- geodata::world(resolution=3, path=out_path)
-  
-  bolivia_boundaries <- admin[admin$NAME_0 == 'Bolivia']
-  
-  #------- Download low-res DEM for all of Bolivia -----------------------------
-  elev_bolivia <- geodata::elevation_30s(country='Bolivia',
-                                         path=file.path(out_path, 'strm'))
-  
-  
-  #------- Download high-res DEM for watershed ---------------------------------
-  #net_bbox <- ext(terra::project(x=vect(in_net), crs(elv_bolivia)))
-  # elev_tiles <- geodata::elevation_3s(lon=net_bbox[1:2], lat=net_bbox[3:4],
-  #                                     path = file.path(out_path, 'strm'))
-  
-  tile <- '23_16'
-  dem_path = file.path(out_path, paste0('srtm_', tile, '.zip'))
-  if (!file.exists(dem_path)) {
-    download.file(
-      paste0('https://srtm.csi.cgiar.org/wp-content/uploads/files/srtm_5x5/TIFF/srtm_',
-             tile, '.zip'), 
-      dem_path)
-  }
-  
-  elev_net <- unzip(dem_path, exdir = out_path) %>%
-    grep('.tif', ., value = T) %>%
-    terra::rast(.)
-  
-  # # tile_id_list <- c('23_14', '23_15', '23_16', '23_17',
-  # #          '24_14', '24_15', '24_16', '24_17',
-  # #          '25_16', '25_15', '25_16', '25_17')
-  # 
-  # elev_tiles <- lapply(tile_id_list, function(tile) {
-  #   print(tile)
-  #   dem_path = file.path(out_path, paste0('srtm_', tile, '.zip'))
-  #   if (!file.exists(dem_path)) {
-  #     download.file(
-  #       paste0('https://srtm.csi.cgiar.org/wp-content/uploads/files/srtm_5x5/TIFF/srtm_',
-  #              tile, '.zip'), 
-  #       dem_path)
-  #   }
-  #   
-  #   elev <- unzip(dem_path, exdir = out_path) %>%
-  #     grep('.tif', ., value = T) %>%
-  #     terra::rast(.)
-  #   
-  #   return(elev)
-  # })
-  # 
-  # #------- Mosaick and crop DEM  -----------------------------------------------
-  # #dem_out_path <- file.path(out_path, 'dem_bolivia')
-  # 
-  # elev_crop <- sprc(elev_tiles) %>%
-  #   merge %>%  
-  #   crop(ext(bolivia_boundaries) + 0.1) %>%
-  #   mask(bolivia_boundaries)
-  # 
-  # names(elev_crop) <- 'elevation'
-  # 
-  # out_elev_rast <- file.path(out_path, 'elev_crop.tif')
-  # writeRaster(elev_crop, out_elev_rast, overwrite = T)
-  # 
-  # #lc <- geodata::landcover('trees')
-  
-  #------- Function outputs ----------------------------------------------------
-  return(list(
-    admin = terra::serialize(admin, NULL),
-    elev_bolivia = terra::serialize(elev_bolivia, NULL),
-    elev_net = terra::serialize(elev_net, NULL)
-  ))
-}
 
 
-#--- Create hillshade ---------------------------------------------------------
-create_hillshade <- function(in_dem, z_exponent, write=F, out_path) {
-  #From Dr. Dominic Royé - https://dominicroye.github.io/en/2022/hillshade-effects/
-  #terra::rast(in_basemaps$elev_path) %>%
-  elev <- in_dem %>%
-    terra::project("epsg:32720") %>%
-    .^(z_exponent)
-  
-  # estimate the slope
-  sl <- terra::terrain(elev, "slope", unit = "radians")
-  
-  # estimate the aspect or orientation
-  asp <- terra::terrain(elev, "aspect", unit = "radians")
-  
-  # pass multiple directions to shade()
-  hillmulti <- purrr::map(c(270, 15, 60, 330), function(dir){ 
-    shade(sl, asp, 
-          angle = 45, 
-          direction = dir,
-          normalize= TRUE)}
-  ) %>%
-    rast %>%
-    sum
-  
-  if (write) {
-    terra::writeRaster(hillmulti, out_path, overwrite = T)
-    return(
-      out_rast
-    )
-  } else {
-    return(serialize(hillmulti, NULL))
-  }
-  
-}
-
-
-#--- Map sites --------------------------------------------------------------
-# in_net = tar_read(net_directed)
-# in_sites_path = tar_read(sites_path)
-# in_basemaps <- tar_read(basemaps)
-# in_hillshade_bolivia <- tar_read(hillshade_bolivia)
-# in_hillshade_net <- tar_read(hillshade_net)
-
-map_caynaca <- function(in_spenv_dt, 
-                        in_net,
-                        in_sites_path,
-                        in_basemaps,
-                        in_hillshade_bolivia,
-                        in_hillshade_net,
-                        out_plot) {
-  #------------ Make watershed map ---------------------------------------------
-  netbbox <- ext(vect(in_net))
-  
-  elev_net <- unserialize(in_basemaps$elev_net) %>%
-    terra::project("epsg:32720") %>%
-    terra::crop(netbbox + 1000) 
-  
-  #Load and crop hillshade
-  hilldf_net <- unserialize(in_hillshade_net) %>%
-    terra::crop(netbbox + 1000) 
-  
-  #Format Hillshade map - https://dieghernan.github.io/202210_tidyterra-hillshade/
-  # normalize names
-  names(hilldf_net) <- "shades"
-  # Make palette
-  pal_greys <- hcl.colors(1000, "Grays")
-  # Use a vector of colors
-  index <- hilldf_net %>%
-    tidyterra::mutate(index_col = rescale(shades, to = c(1, length(pal_greys)))) %>%
-    tidyterra::mutate(index_col = round(index_col)) %>%
-    tidyterra::pull(index_col)
-  # Get cols
-  vector_cols <- pal_greys[index]
-  
-  axis_ext <- vect(in_net) %>%
-    project("EPSG:4326") %>%
-    ext() %>%
-    as.vector()
-  
-  br_y <- seq(axis_ext[3], axis_ext[4], length.out = 1000) %>%
-    pretty(n = 3) %>%
-    round(3) %>%
-    unique()
-  
-  br_x <- seq(axis_ext[1], axis_ext[2], length.out = 1000) %>%
-    pretty(n = 3) %>%
-    round(3) %>%
-    unique()
-  
-  hill_plot <- ggplot() +
-    geom_spatraster(
-      data = hilldf_net, fill = vector_cols, maxcell = Inf,
-      alpha = 0.6
-    ) +
-    scale_x_continuous(breaks=br_x, expand=c(0,0)) +
-    scale_y_continuous(breaks=br_y, expand=c(0,0))
-
-  #Format full map
-  r_limits <- minmax(elev_net$srtm_23_16) %>% as.vector() 
-  r_limits <-  c(floor(r_limits[1] / 500), 
-                 ceiling(r_limits[2] / 500)) * 500 %>%
-    pmax(0)
-  
-  base_plot <- hill_plot +
-    # Avoid resampling with maxcell
-    geom_spatraster(data =  elev_net, maxcell = Inf) +
-    scale_fill_hypso_tint_c(
-      limits = r_limits,
-      palette = "etopo1_hypso",
-      alpha = 0.3,
-      labels = label_comma(),
-      # For the legend I use custom breaks
-      breaks = c(
-        seq(0, 500, 100),
-        seq(750, 1500, 250),
-        2000
-      )
-    )
-  
-  net_plot <- base_plot +
-    geom_sf(data = in_net, aes(linewidth=stream_order), color='blue') +
-    scale_linewidth_continuous(range=c(0.5,1.7)) +
-    geom_spatvector(data = vect(in_sites_path), 
-                    color='black',
-                    size = 1.75) +
-    theme_minimal() +
-    theme(legend.position = "none",
-          panel.grid = element_blank(),
-          panel.background = element_rect(color='white')) +
-    ggspatial::annotation_scale(location = "bl", width_hint = 0.4) +
-    ggspatial::annotation_north_arrow(location = "bl", which_north = "true", 
-                                      pad_x = unit(0.0, "in"), pad_y = unit(0.2, "in"),
-                                      style = north_arrow_fancy_orienteering)
-  
-  #------------ Make inset map -------------------------------------------------
-  admin <- unserialize(in_basemaps$admin)%>%
-    .[.$NAME_0 %in% c('Argentina', 'Chile', 'Brazil', 'Paraguay',
-                      'Peru', 'Bolivia')] %>%
-    terra::project("EPSG:4326")
-  
-  elev <- unserialize(in_basemaps$elev_bolivia) %>%
-    terra::project("EPSG:4326")
-  
-  #Load and crop hillshade
-  hilldf_bolivia <- unserialize(in_hillshade_bolivia) %>%
-    terra::project("EPSG:4326")
-  
-  #Format Hillshade map - https://dieghernan.github.io/202210_tidyterra-hillshade/
-  # normalize names
-  names(hilldf_bolivia) <- "shades"
-  # Make palette
-  # Use a vector of colors
-  index_bolivia <- hilldf_bolivia %>%
-    tidyterra::mutate(index_col = rescale(shades, to = c(1, length(pal_greys)))) %>%
-    tidyterra::mutate(index_col = round(index_col)) %>%
-    tidyterra::pull(index_col)
-
-  # Get cols
-  vector_cols_bolivia <- pal_greys[index_bolivia]
-  
-  axis_ext_bolivia <- admin[admin$NAME_0 == 'Bolivia'] %>%
-    project("EPSG:4326") %>%
-    ext() %>%
-    as.vector()
-  
-  br_y_bolivia <- seq(axis_ext_bolivia[3], axis_ext_bolivia[4], 
-                      length.out = 1000) %>%
-    pretty(n = 3) %>%
-    round(3) %>%
-    unique()
-  
-  br_x_bolivia <- seq(axis_ext_bolivia[1], axis_ext_bolivia[2], 
-                      length.out = 1000) %>%
-    pretty(n = 3) %>%
-    round(3) %>%
-    unique()
-  
-  net_inset_rect <- as.polygons(netbbox,
-                                crs = "epsg:32720") %>%
-    project("EPSG:4326")
-  
-  admin_cropped <- crop(admin, ext(admin[admin$NAME_0 == 'Bolivia']))
-
-  bolivia_plot <- ggplot() +
-    geom_spatvector(
-      data = admin_cropped,
-      fill = 'white'
-    ) + 
-    geom_spatraster(
-      data = hilldf_bolivia, fill = vector_cols_bolivia, maxcell = Inf,
-      alpha = 0.8
-    ) +
-    geom_sf_text(data = admin_cropped,
-                 aes(label = NAME_0),
-                 size=3) +
-    geom_sf(data = net_inset_rect, linewidth=1, color='black')  +
-    scale_x_continuous(breaks=br_x_bolivia, expand=c(0,0)) +
-    scale_y_continuous(breaks=br_y_bolivia, expand=c(0,0)) +
-    theme_minimal() +
-    theme(legend.position = "none",
-          panel.grid = element_blank(),
-          panel.background = element_rect(color='white'),
-          axis.title = element_blank())
-
-  cbinded_plot <- (net_plot | bolivia_plot)
-  
-  ggsave(out_plot,
-         plot = cbinded_plot,
-         width = 8,
-         height = 5,
-         units = 'in',
-         dpi = 600)
-  
-  return(out_plot)
-  
-}
-
-#--- Map drying and richness --------------------------------------------------------------
-# in_spenv_dt = tar_read(spenv_dt)
-# in_net = tar_read(net_directed)
-# in_sites_path = tar_read(sites_path)
-
-map_data <- function(in_spenv_dt, 
-                        in_net,
-                        in_sites_path,
-                        sites_IDcol) {
-  
-  sites_vect <- vect(in_sites_path) %>%
-    merge(in_spenv_dt, by.x = sites_IDcol, by.y = 'sitio')
-   
-  p_estado <- ggplot(data=sites_vect) +
-    geom_sf(data = in_net, aes(linewidth=stream_order), color='grey') +
-    scale_linewidth_continuous(range=c(0.5,1.7), guide = "none") +
-    scale_color_manual(values = c('#2988ad', '#fea534', '#ff6138'),
-                       labels = c('Flowing', 'Isolated pools', 'Dry bed')) +
-    geom_sf(aes(color=estado_de_flujo), size=2) +
-    geom_text(aes(label=format(fecha, '%b'), x= Inf, y = Inf),
-              hjust = 2, vjust = 3.3)+
-    facet_wrap(~fecha, labeller = function(x) format(x, '%b')) +
-    theme_void() +
-    theme(panel.spacing = unit(-2, "lines"),
-          strip.text = element_blank(),
-          legend.title = element_blank())
-
-  p_rich <- ggplot(data=sites_vect) +
-    geom_sf(data = in_net, aes(linewidth=stream_order), color='grey') +
-    scale_linewidth_continuous(range=c(0.5,1.7), guide = "none") +
-    geom_sf(aes(color=alpha_div), size=2.5) +
-    scale_color_gradientn(name=str_wrap('Taxonomic richness', 15),
-                          colours = viridis(256, direction=-1)) +
-    geom_text(aes(label=format(fecha, '%b'), x= Inf, y = Inf),
-              hjust = 2, vjust = 3.3) +
-    facet_wrap(~fecha, labeller = function(x) format(x, '%b')) +
-    theme_void()  +
-    theme(panel.spacing = unit(-2, "lines"),
-          strip.text = element_blank())
-  
-  p_abund <- ggplot(data=sites_vect) +
-    geom_sf(data = in_net, aes(linewidth=stream_order), color='grey') +
-    scale_linewidth_continuous(range=c(0.5,1.7), guide = "none") +
-    geom_sf(aes(color=total), size=2.5) +
-    scale_color_gradientn(name=str_wrap('Abundance', 15),
-                          colours = viridis(256, direction=-1)) +
-    geom_text(aes(label=format(fecha, '%b'), x= Inf, y = Inf),
-              hjust = 2, vjust = 3.3) +
-    facet_wrap(~fecha) +
-    theme_void()  +
-    theme(panel.spacing = unit(-2, "lines"),
-          strip.text = element_blank())
-  
-  return(list(
-    p_estado = p_estado,
-    p_rich = p_rich,
-    p_abund = p_abund
-  ))
-}

@@ -1,4 +1,4 @@
-source("src/caynaca_packages.R")
+suppressMessages(source("src/caynaca_packages.R"))
 source("src/caynaca_functions.R")
 
 rootdir <- here::here()
@@ -13,25 +13,36 @@ overwrite <- T
 list(
   tar_target(
     rawdata_path,
-    file.path(datadir, 'alltaxa_mod.xls')
+    file.path(datadir, 'alltaxa_mod_mar2024_edit.xls'),
+    format = "file"
   )
   ,
   
   tar_target(
-    funcdata_path,
-    file.path(datadir, 'relative_abundance_bio_traits.xlsx')
+    traitsdata_path,
+    file.path(datadir, 'bio_traits.csv'),
+    format = "file"
+  )
+  ,
+  
+  tar_target(
+   familydata_path,
+   file.path(datadir, 'relative_abundance_bio_traits.xlsx'),
+   format = "file"
   )
   ,
   
   tar_target(
     net_path,
-    file.path(datadir, 'MatrixNaborA', 'FNetRiver.shp')
+    file.path(datadir, 'MatrixNaborA', 'FNetRiver.shp'),
+    format = "file"
   )
   ,
   
   tar_target(
     sites_path,
-    file.path(datadir, 'MatrixNaborA', 'FSites.shp')
+    file.path(datadir, 'MatrixNaborA', 'FSites.shp'),
+    format = "file"
   )
   ,
   
@@ -40,6 +51,22 @@ list(
     readxl::read_xls(rawdata_path, sheet="alltaxa") %>%
       setDT
   ),
+  
+  tar_target(
+    traits_rawdt,
+    fread(traitsdata_path) %>%
+      setDT
+  )
+  ,
+  
+  tar_target(
+    family_rawdt,
+    readxl::read_xlsx(familydata_path, sheet="trsposed") %>%
+      setDT %>%
+      setnames("Policentropodidae", "Polycentropodidae") %>%
+      setnames(function(x) {str_trim(tolower(x))})
+  )
+  ,
   
   tar_target(
     env_rawdt,
@@ -72,6 +99,12 @@ list(
         levels=c('F', 'IP', 'D'),
         labels = c('Flowing', 'Isolated pools', 'Dry bed'))
       ]
+  )
+  ,
+  
+  tar_target(
+   traits_dt,
+   format_traitsdata(in_traits_rawdt = traits_rawdt)
   )
   ,
   
@@ -144,8 +177,8 @@ list(
   ),
   
   tar_target(
-    spatial_beta,
-    compute_spatial_beta(
+    spatial_taxo_beta,
+    compute_spatial_taxo_beta(
       in_sp_dt = sp_dt
     )
   )
@@ -154,7 +187,7 @@ list(
   tar_target(
     spatial_beta_plots,
     plot_spatial_beta(
-      in_spatial_beta = spatial_beta
+      in_spatial_beta = spatial_taxo_beta
     )
   )
   ,
@@ -162,7 +195,7 @@ list(
   tar_target(
     mantel_dt,
     compute_mantel(in_spenv_dt = spenv_dt,
-                   in_spatial_beta = spatial_beta,
+                   in_spatial_beta = spatial_taxo_beta,
                    in_env_dist = env_dist,
                    in_euc_dist = euc_dist,
                    in_net_dist = net_dist)
@@ -224,3 +257,4 @@ list(
 
 
 #Later on: Compute topographic distance (terrain is accidented)
+

@@ -2,7 +2,9 @@
 title: "Metacommunity dynamics in Caynaca watershed"
 author: "Mathis L. Messager"
 date: "`r Sys.Date()`"
-output: html_document
+output:
+  html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include = FALSE}
@@ -44,6 +46,8 @@ sp_plots$plot_sp_abundance_1 +
 sp_plots$plot_sp_abundance_2 +
   patchwork::plot_annotation(title = 'Distribution of species across sites - #2')
 ```
+
+
 ```{r sp_plots2, echo=FALSE, fig.height = 4, fig.width = 8}
 sp_plots$plot_abundance_vs_time +
   patchwork::plot_annotation(title = 'Total abundance over time')
