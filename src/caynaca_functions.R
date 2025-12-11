@@ -1069,6 +1069,8 @@ plot_spdata <- function(in_spenv_dt, in_sp_dt) {
 }
 
 #------------ plot_envdata -------------
+# in_env_dt <- tar_read(env_dt)
+
 plot_envdata <- function(in_env_dt) {
   in_env_dt[, estado_de_flujo := factor(
     estado_de_flujo, 
@@ -1097,37 +1099,9 @@ plot_envdata <- function(in_env_dt) {
     facet_wrap(~variable, scales='free') +
     theme_bw() 
   
-  estado_de_flujo_ts <- in_env_dt[, list(
-    estado_de_flujo = .SD[, .N, by=estado_de_flujo]$estado_de_flujo,
-    rel_freq = .SD[, .N, by=estado_de_flujo]$N/.N), 
-    by=fecha] %>%
-    merge(expand.grid(unique(in_env_dt$fecha),
-                      c('Flowing', 'Isolated pools', 'Dry bed')),
-          by.x=c('fecha', 'estado_de_flujo'),
-          by.y=c('Var1', 'Var2'),
-          all.y=T
-    ) %>%
-    .[is.na(rel_freq), rel_freq := 0]
-  
-  estado_de_flujo_tsplot <- ggplot(data=estado_de_flujo_ts) +
-    geom_area(aes(x=fecha, y=rel_freq, 
-                  fill=estado_de_flujo, group=estado_de_flujo),
-              position='stack') +
-    scale_y_continuous(name = 'Relative frequency of flow states across sites') +
-    scale_x_datetime(name = 'Date', 
-                     breaks = '2 months',
-                     labels = date_format("%b")) +
-    scale_fill_manual(
-      name = 'Flow state',
-      values = c('#2988ad', '#fea534', '#ff6138')) +
-    coord_cartesian(expand=F) +
-    theme_classic()
-  
   return(list(
     env_boxplots_bysites = env_boxplots_bysites,
-    env_distribs_plot = env_distribs_plot,
-    estado_de_flujo_ts = estado_de_flujo_ts,
-    estado_de_flujo_tsplot = estado_de_flujo_tsplot
+    env_distribs_plot = env_distribs_plot
   ))
 }
 
@@ -1160,22 +1134,83 @@ map_data <- function(in_spenv_dt,
                      in_sites_path,
                      sites_IDcol) {
   
-  sites_vect <- vect(in_sites_path) %>%
-    merge(in_spenv_dt, by.x = sites_IDcol, by.y = 'sitio')
+  spenv_dt <- in_spenv_dt[, month := format(fecha, '%b')] %>%
+    merge(
+      data.table(month=c("Mar", "May", "Jun", "Aug", "Oct", "Dec"),
+                 period=c("1.Before drying - March",
+                          "2.Drying - May",
+                          "3.Dry 1 - June",
+                          "4.Dry 2 - August",
+                          "5.Rewetting 1 - October",
+                          "6.Rewetting 2 - December"))
+      , by='month')
   
-  p_estado <- ggplot(data=sites_vect) +
+  spenv_dt[,estado_de_flujo := plyr::revalue(estado_de_flujo,
+                                            c('Isolated pools' = 'Disconnected pools'))]
+  
+  sites_vect <- vect(in_sites_path) %>%
+    merge(spenv_dt, by.x = sites_IDcol, by.y = 'sitio')
+  
+  p_estado_map <- ggplot(data=sites_vect) +
     geom_sf(data = in_net, aes(linewidth=stream_order), color='grey') +
-    scale_linewidth_continuous(range=c(0.5,1.7), guide = "none") +
-    scale_color_manual(values = c('#2988ad', '#fea534', '#ff6138'),
-                       labels = c('Flowing', 'Isolated pools', 'Dry bed')) +
     geom_sf(aes(color=estado_de_flujo), size=2) +
-    geom_text(aes(label=format(fecha, '%b'), x= Inf, y = Inf),
-              hjust = 2, vjust = 3.3)+
-    facet_wrap(~fecha, labeller = function(x) format(x, '%b')) +
+    scale_linewidth_continuous(range=c(0.5,1.7), guide = "none") +
+    scale_color_manual(name = 'Flow state',
+                       values = c('#2988ad', '#fea534', '#ff6138')) +
+    facet_wrap(~period, ncol=2) +
     theme_void() +
-    theme(panel.spacing = unit(-2, "lines"),
-          strip.text = element_blank(),
-          legend.title = element_blank())
+    theme(
+      text = element_text(size=14),
+      strip.text = element_text(hjust=0), 
+      strip.background = element_blank(),
+      strip.clip = "off",
+      plot.background = element_rect(fill='transparent'),
+      panel.background = element_rect(fill='transparent'),
+      legend.position = 'none'
+      )
+  
+  estado_de_flujo_ts <- as.data.table(sites_vect) %>%
+    .[, list(
+      estado_de_flujo = .SD[, .N, by=estado_de_flujo]$estado_de_flujo,
+      rel_freq = .SD[, .N, by=estado_de_flujo]$N/.N), 
+      by=.(period, fecha)] %>%
+    merge(expand.grid(unique(sites_vect$fecha),
+                      c('Flowing', 'Disconnected pools', 'Dry bed')),
+          by.x=c('fecha', 'estado_de_flujo'),
+          by.y=c('Var1', 'Var2'),
+          all.y=T
+    ) %>%
+    .[is.na(rel_freq), rel_freq := 0]
+  
+  p_estado_ts <- ggplot(data=estado_de_flujo_ts) +
+    geom_area(aes(x=fecha, y=rel_freq, 
+                  fill=estado_de_flujo, group=estado_de_flujo),
+              position='stack') +
+    geom_vline(aes(xintercept = fecha)) +
+    geom_text(data=estado_de_flujo_ts[!duplicated(period),], 
+              aes(x= fecha, y = 0.95, label=period), 
+              angle=90, hjust=1, vjust=1) +
+    scale_y_continuous(name = 'Relative frequency of flow states across sites') +
+    scale_x_datetime(name = 'Date', 
+                     breaks = '2 months',
+                     labels = date_format("%b")) +
+    scale_fill_manual(
+      name = 'Flow state',
+      values = c('#2988ad', '#fea534', '#ff6138')) +
+    coord_cartesian(expand=F, clip='off') +
+    theme_classic() +
+    theme(text = element_text(size=14),
+          legend.title = element_blank(),
+          legend.position = c(0.9, 0.9)
+    )
+  
+  p_estado <- p_estado_map / p_estado_ts + plot_layout(design =  "
+  AA
+  AA
+  AA
+  BB
+  ")
+  
   
   p_rich <- ggplot(data=sites_vect) +
     geom_sf(data = in_net, aes(linewidth=stream_order), color='grey') +
